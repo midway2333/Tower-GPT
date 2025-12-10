@@ -226,8 +226,7 @@ class trainer():
         self._init_tensorboard()   # 初始化 TensorBoard
         self._init_optimizer()     # 初始化优化器
         self._init_dataloader()    # 初始化数据加载器
-
-
+        self._init_model()         # 初始化模型
 
         signal.signal(signal.SIGINT, self.exit)
 
@@ -317,7 +316,32 @@ class trainer():
                 self.logger.error("Manual: CPU 加载失败; 请检查设备")
                 raise RuntimeError("CPU 加载失败; 请检查设备")
             # 尽管 torch.cpu.is_available() 在一般情况下恒为 True
-            # 此处为保持设备检查逻辑统一仍使用
+            # 此处为保持设备检查逻辑统一仍使用该判断
+
+    def _init_model(self):
+        """初始化模型"""
+        self.model = transformer(
+            decoder_num=self.decoder_num,
+            head_num=self.head_num,
+            d=self.d,
+            dk=self.dk,
+            dff=self.dff,
+            vocab_size=self.vocab_size,
+            device=self.device,
+            dropout=self.dropout,
+        )   # 构建模型
+
+        if self.compile:   # 编译模型
+            try:
+                self.model = torch.compile(self.model)
+                self.logger.debug("模型编译完成")
+
+            except Exception as e:
+                self.logger.error(f"模型编译失败: {e}")
+                raise RuntimeError(f"模型编译失败: {e}")
+            
+        self.model.to(self.device)   # 模型移动到指定设备
+        self.logger.debug(f"模型已加载到设备: {self.device}")
 
     def _init_dataloader(self):
         """初始化数据加载器"""
@@ -672,32 +696,6 @@ class trainer():
 
     def load_checkpoint(self):
         """加载检查点"""
-        self.model = transformer(
-            decoder_num=self.decoder_num,
-            head_num=self.head_num,
-            d=self.d,
-            dk=self.dk,
-            dff=self.dff,
-            vocab_size=self.vocab_size,
-            dropout=self.dropout,
-        )   # 构建模型
-        self.logger.debug("模型构建完成")
-
-        if self.compile:   # 编译模型
-            try:
-                self.model = torch.compile(self.model)
-                self.logger.debug("模型编译完成")
-
-            except Exception as e:
-                self.logger.error(f"模型编译失败: {e}")
-                raise RuntimeError(f"模型编译失败: {e}")
-            
-        self.model.to(self.device)   # 模型移动到指定设备
-        self.logger.debug(f"模型已加载到设备: {self.device}")
-
-        self._init_optimizer()   # 初始化优化器
-        self.logger.debug("优化器初始化完成")
-
         if self.keep_train and self.train_model_dir and self.train_model_name is not None:
             self.logger.debug("加载检查点")
             try:
@@ -708,7 +706,7 @@ class trainer():
                 )   # 构建检查点路径
 
                 self.model.load_state_dict(torch.load(train_path, map_location=self.device))
-                self.logger.debug(f"成功加载检查点: {train_path}")
+                self.logger.info(f"成功加载检查点: {train_path}")
                 # 加载模型状态
 
                 if self.load_optimizer:   # 加载优化器状态
@@ -720,7 +718,7 @@ class trainer():
                         )   # 构建优化器检查点路径
 
                         self.optimizer.load_state_dict(torch.load(optimizer_path, map_location=self.device))
-                        self.logger.debug(f"成功加载优化器检查点: {optimizer_path}")
+                        self.logger.info(f"成功加载优化器检查点: {optimizer_path}")
 
                     except Exception as e:
                         self.logger.error(f"加载优化器检查点失败: {e}")
