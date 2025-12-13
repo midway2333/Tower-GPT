@@ -48,7 +48,7 @@ import logging
 from remaster.logger import TrainLogger
 
 
-class trainer():
+class Trainer():
     def __init__(self, config: TrainerConfig):
         """初始化训练器
 
@@ -217,7 +217,9 @@ class trainer():
         self.now_epoch = 0
         """当前轮数"""
         self.train_steps = 0
-        """当前训练步数"""
+        """当前训练步数, 每次梯度更新时增加"""
+        self.all_epochs_steps = 0
+        """所有轮次的总训练步数"""
         self.local_steps = 0
         """当前数据加载步数"""
         self.info_steps = 0
@@ -480,7 +482,6 @@ class trainer():
             pct_start=self.pct_start,
             anneal_strategy=self.anneal_strategy,   # type: ignore
         )   # 创建学习率调度器
-
 
     def _init_tensorboard(self):
         """初始化 TensorBoard"""
@@ -832,10 +833,49 @@ class trainer():
 
     def train(self):
         """训练主进程"""
+        self.model.train()   # 设置为训练模式
+        self.progress()   # 初始化进度条
+
+        tsp_show_txt = 'train_info_steps: {}/{}'.format(
+                self.info_steps, self.all_tsp
+        )   # 设置tsp更新信息
+
+        epoch_show_txt = 'epoch: {}/{}'.format(
+            self.now_epoch, self.all_epochs
+        )   # 设置 epoch 更新信息
+
+        self.train_progress.update(self.tsp_progress, show_info=tsp_show_txt, advance=0)
+        self.train_progress.update(self.epoch_progress, show_info=epoch_show_txt, advance=1)
+        # 初始进度条显示更新
+
+        for epoch in range(self.now_epoch, self.all_epochs):
+            self.train_one_epoch()
+            # 训练一个轮次
+
+            test_loss = self.test()
+            # 测试模型
+
+            self.now_epoch += 1
+            # 轮次增加
+
+            epoch_show_txt = 'epoch: {}/{}'.format(
+                self.now_epoch, self.all_epochs
+            )   # 设置epoch更新信息
+
+            self.train_progress.update(self.epoch_progress, show_info=epoch_show_txt, advance=1)
+            # 更新epoch信息与进度条
+
+            self.save_checkpoint("epoch", f"epoch_{self.now_epoch}_step_{self.train_steps}")
+            # 保存检查点
+
+            if test_loss is not None and self.save_best_checkpoint:
+                self.check_best_checkpoint(None, test_loss, self.train_steps)
+                # 保存最佳检查点
 
     def train_one_epoch(self):
         """训练一个轮次"""
         total_loss = 0.0
+        info_loss = 0.0
         for step, (x, y, loss_mask) in enumerate(self.train_dataloader):   # 生成步进索引
             x: Tensor = x.to(self.device).long()
             y: Tensor = y.to(self.device).long() 
@@ -852,6 +892,7 @@ class trainer():
                 loss.backward()
 
             total_loss += loss.item()
+            info_loss += loss.item()
             self.local_steps = step
             # 累计损失和本地步数更新
 
@@ -871,12 +912,19 @@ class trainer():
                     self.optimizer.step()
 
                 self.optimizer.zero_grad(set_to_none=True)
+                self.all_epochs_steps += 1
                 self.train_steps += 1
                 # 梯度清空
+
+                if self.writer is not None and self.writer_name is not None:
+                    self.writer.add_scalar(self.writer_name+'_train_loss', loss.item(), self.all_epochs_steps)
+                    # 记录训练损失
 
                 if self.rate_scheduler is not None:
                     self.rate_scheduler.step()
                     # 更新学习率调度器
+
+                total_loss = 0.0   # 重置批次损失
 
             if (step + 1) % self.info_update_interval == 0:
                 self.info_steps += 1
@@ -888,28 +936,73 @@ class trainer():
                 self.train_progress.update(self.tsp_progress, show_info=tsp_show_txt)
                 # 更新 tsp 信息
 
-                avg_loss = (total_loss / self.info_update_interval) * self.accumulation_steps
+                avg_loss = (info_loss / self.info_update_interval) * self.accumulation_steps
                 # 计算平均损失
 
-                total_loss = 0.0   # 重置总损失
+                info_loss = 0.0   # 重置总损失
 
                 if self.writer is not None and self.writer_name is not None:
-                    self.writer.add_scalar(self.writer_name+'_train_loss', avg_loss, self.info_steps)
+                    self.writer.add_scalar(self.writer_name+'_avg_train_loss', avg_loss, self.info_steps)
                     # 记录训练损失
 
                     if self.ppl_eval:
                         ppl = math.exp(avg_loss)
-                        self.writer.add_scalar(self.writer_name+'_train_ppl', ppl, self.info_steps)
+                        self.writer.add_scalar(self.writer_name+'_avg_train_ppl', ppl, self.info_steps)
                         # 记录训练 PPL
 
-                self.evaluate()
+                eval_loss = self.evaluate()
                 # 评估模型
 
-                self.save_checkpoint(self.output_dir, f"epoch_{self.now_epoch}_step_{self.train_steps}")
+                self.save_checkpoint("time", f"epoch_{self.now_epoch}_step_{self.train_steps}")
                 # 保存检查点
 
+                self.delete_checkpoint("time")
+                # 删除旧检查点
+
+                if eval_loss is not None and self.save_best_checkpoint:
+                    self.check_best_checkpoint(None, eval_loss, self.train_steps)
+                    # 保存最佳检查点
+
     def evaluate(self):
-        pass
+        if self.valid_dataloader is not None:
+            self.model.eval()   # 设置为评估模式
+            epoch_test_loss = 0
+
+            with autocast(device_type=str(self.device), dtype=self._mixed_dtype()):
+            # 自动混合精度
+
+                with torch.no_grad():  # 不需要计算梯度
+                    for tx, ty, t_mask in self.valid_dataloader:
+                        test_loss = self._forward_calc(tx, ty, t_mask)
+                        epoch_test_loss += test_loss.item()
+                        # 同上
+                
+            self.avg_test_loss = (epoch_test_loss / len(self.valid_dataloader))   # type: ignore
+            # 计算损失
+
+            avg_val_ppl = math.exp(self.avg_test_loss)
+            # 计算 PPL
+
+            self.logger.info(f"更新步数: {self.info_steps}")
+            self.logger.info(f"验证损失: {self.avg_test_loss:.4f}")
+
+            if self.ppl_eval:
+                self.logger.info(f"验证 PPL: {avg_val_ppl:.4f}")
+            # 更新 logger 信息
+
+            # TODO: BLUE 评估
+
+            if self.writer is not None and self.writer_name is not None:   # 记录验证损失
+                self.writer.add_scalar(self.writer_name+'_valid', self.avg_test_loss, self.train_steps)
+
+                if self.ppl_eval:   # 记录验证 PPL
+                    self.writer.add_scalar(self.writer_name+'_valid_ppl', avg_val_ppl, self.train_steps)
+
+            self.model.train()
+            return self.avg_test_loss
+
+        else:   # 无验证集时跳过
+            return None
 
     def test(self):
         """运用评估集测试模型"""
@@ -929,13 +1022,29 @@ class trainer():
             self.avg_test_loss = (epoch_test_loss / len(self.test_dataloader))   # type: ignore
             # 计算损失
 
+            avg_test_ppl = math.exp(self.avg_test_loss)
+            # 计算 PPL
+
+            self.logger.info(f"更新轮次: {self.now_epoch}")
+            self.logger.info(f"测试损失: {self.avg_test_loss:.4f}")
+
+            if self.ppl_eval:
+                self.logger.info(f"测试 PPL: {avg_test_ppl:.4f}")
+            # 更新 logger 信息
+
+            # TODO: BLUE 评估
+
             if self.writer is not None and self.writer_name is not None:   # 记录测试损失
                 self.writer.add_scalar(self.writer_name+'_test', self.avg_test_loss, self.train_steps)
 
+                if self.ppl_eval:   # 记录测试 PPL
+                    self.writer.add_scalar(self.writer_name+'_test_ppl', avg_test_ppl, self.train_steps)
+
             self.model.train()
+            return self.avg_test_loss
 
         else:   # 无测试集时跳过
-            pass
+            return None
 
     def print_info(self):
         """打印训练配置信息"""
