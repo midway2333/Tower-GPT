@@ -215,7 +215,7 @@ class Trainer():
         """混合精度训练的梯度缩放器"""
 
         self.now_epoch = 0
-        """当前轮数"""
+        """当前轮数, 从 0 开始计数"""
         self.train_steps = 0
         """当前训练步数, 每次梯度更新时增加"""
         self.all_epochs_steps = 0
@@ -224,11 +224,18 @@ class Trainer():
         """当前数据加载步数"""
         self.info_steps = 0
         """当前信息更新步数"""
+        self.skip_steps = 0
+        """需要跳过的批次数量"""
+        self.need_skip = False
+        """是否需要跳过批次"""
 
         self._init_tensorboard()   # 初始化 TensorBoard
         self._init_optimizer()     # 初始化优化器
         self._init_dataloader()    # 初始化数据加载器
         self._init_model()         # 初始化模型
+
+        if self.keep_train:
+            self._load_resume_page()   # 加载恢复页面
 
         signal.signal(signal.SIGINT, self.exit)
 
@@ -558,15 +565,60 @@ class Trainer():
 
             self.resume_scheduler_path = os.path.join(os.path.dirname(self.ckpt_path), resume_page["scheduler_file"]) if resume_page["scheduler_file"] else None
             # 从恢复页面中提取调度器子路径, 若不存在则为 None
-
+            
+            self.train_data_path = resume_page["train_data_path"]
+            # 从恢复页面中提取训练数据路径
+            
+            self.valid_data_path = resume_page["valid_data_path"]
+            # 从恢复页面中提取验证数据路径
+            
+            self.test_data_path = resume_page["test_data_path"]
+            # 从恢复页面中提取测试数据路径
+            
+            self.tokenizer_path = resume_page["tokenizer_path"]
+            # 从恢复页面中提取分词器路径
+            
+            self.train_method = resume_page["train_method"]
+            # 从恢复页面中提取训练方法
+            
+            self.finetune = resume_page["finetune"]
+            # 从恢复页面中提取微调标志
+            
+            self.batch_size = resume_page["batch_size"]
+            # 从恢复页面中提取批量大小
+            
+            self.accumulation_steps = resume_page["accumulation_steps"]
+            # 从恢复页面中提取梯度累积步数
+            
+            self.block_size = resume_page["block_size"]
+            # 从恢复页面中提取块大小
+            
+            self.resume_time = resume_page["time"]
+            # 从恢复页面中提取保存时间
+            
+            self.all_epochs = resume_page["all_epochs"]
+            # 从恢复页面中提取总 epoch 数
+            
             self.now_epoch = resume_page["now_epoch"]
             # 从恢复页面中提取当前 epoch
-
+            
             self.train_steps = resume_page["train_steps"]
             # 从恢复页面中提取训练步数
-
+            
+            self.tensorboard = resume_page["tensorboard"]
+            # 从恢复页面中提取 tensorboard 标志
+            
+            self.tensorboard_dir = resume_page["tensorboard_dir"]
+            # 从恢复页面中提取 tensorboard 目录
+            
+            self.writer_name = resume_page["writer_name"]
+            # 从恢复页面中提取 writer 名称
+            
             self.skip_steps = resume_page["skip_steps"]
             # 从恢复页面中提取已经加载的步数, 跳过多少步
+
+            self.need_skip = True
+            # 更改需要跳过批次的标志
 
             self.logger.info(f"恢复页面已加载: {self.ckpt_path}")   # logger
 
@@ -834,7 +886,7 @@ class Trainer():
     def train(self):
         """训练主进程"""
         self.model.train()   # 设置为训练模式
-        self.progress()   # 初始化进度条
+        self._init_progress()   # 初始化进度条
 
         tsp_show_txt = 'train_info_steps: {}/{}'.format(
                 self.info_steps, self.all_tsp
@@ -848,7 +900,20 @@ class Trainer():
         self.train_progress.update(self.epoch_progress, show_info=epoch_show_txt, advance=1)
         # 初始进度条显示更新
 
-        for epoch in range(self.now_epoch, self.all_epochs):
+        if self.need_skip:
+            self._init_skip_progess()
+            # 启动跳过批次进度条
+
+            skip_show_txt = 'skipped_steps: {}/{}'.format(
+                0, self.skip_steps
+            )   # 设置跳过批次更新信息
+
+            self.skip_progress.update(self.main_skip_progress, show_info=skip_show_txt, advance=0)
+
+        for epoch in range(self.all_epochs):
+            if epoch < self.now_epoch:
+                continue   # 跳过已经完成的轮次
+
             self.train_one_epoch()
             # 训练一个轮次
 
@@ -876,6 +941,12 @@ class Trainer():
         """训练一个轮次"""
         total_loss = 0.0
         info_loss = 0.0
+
+        # for step in range(self.skip_steps):
+        #     next(self.train_dataloader)  # 丢弃这些批次
+        #     if hasattr(self, 'skip_progress'):
+        #         self.skip_progress.update(1)
+
         for step, (x, y, loss_mask) in enumerate(self.train_dataloader):   # 生成步进索引
             x: Tensor = x.to(self.device).long()
             y: Tensor = y.to(self.device).long() 
@@ -1150,7 +1221,7 @@ class Trainer():
     def update_step(self):
         pass
 
-    def progress(self):
+    def _init_progress(self):
         """进度条可视化训练进度"""
         progress = Progress(
             TextColumn("[progress.description]{task.description}"),   # 显示任务的描述信息
@@ -1165,13 +1236,30 @@ class Trainer():
         self.epoch_progress = progress.add_task(description='epoch: ', show_info='', total=self.all_epochs)
         # epoch进度条
 
-        self.all_tsp = self.data_length * self.all_epochs //   \
-            (self.batch_size * self.info_update_interval)
+        self.all_tsp = self.data_length * self.all_epochs // (self.batch_size * self.info_update_interval)
         self.tsp_progress = progress.add_task(description='steps: ', show_info='', total=self.all_tsp)
         # tsp进度条
 
         self.train_progress = progress   # 对象化进度条
         self.train_progress.start()   # 启动进度条
+
+    def _init_skip_progess(self):
+        """跳过批次进度条"""
+        progress = Progress(
+            TextColumn("[progress.description]{task.description}"),   # 显示任务的描述信息
+            BarColumn(),   # 显示进度条
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),   # 设置样式,保留三位数的整数百分比,右对齐
+            TimeRemainingColumn(),   # 显示基于当前进度推测估计的剩余时间
+            TimeElapsedColumn(),   # 显示运行时间
+            TextColumn("[bold blue]{task.fields[show_info]}"),   # 额外信息
+            refresh_per_second=1,  # 每1秒钟更新一次
+        )
+
+        self.main_skip_progress = progress.add_task(description='skipping: ', show_info='', total=self.skip_steps)
+        # 跳过批次进度条
+
+        self.skip_progress = progress   # 对象化进度条
+        self.skip_progress.start()   # 启动进度条
 
     def exit(self, signum, frame):
         """进程退出时调用
