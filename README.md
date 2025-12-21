@@ -152,7 +152,7 @@ LOGO 图标
 
 <details open> 
 <summary>  <b>25.12.21重大更新</b> </summary>
-- 完全重构训练，推理，dataset/dataloader文件<br>
+- 完全重构训练、推理、dataset/dataloader文件<br>
 - 新的 tokenizer<br>
 - 新的工具文件结构<br>
 - 若干遗留问题修复
@@ -169,4 +169,5 @@ LOGO 图标
 
 本项目虽然已经经过了一段时间的发展，但规范性与实用性依然无法看齐业界内的其它项目；如果您发现了任何新的问题或有关本项目的优化，欢迎在本项目的[issues](https://github.com/midway2333/tower_gpt/issues)中提出<br>
 [第二代Tower](https://github.com/midway2333/Tower2)已经开源！但本项目依然维持更新
+
 
