@@ -1,50 +1,44 @@
-# tower_gpt
+![LOGO](img/big_logo.png)
+
+# Tower-GPT
+
 一个非常简单的gpt实现<br>
 模型使用pytorch实现，不依赖transformers框架<br>
 分词器使用sentencepiece<br>
 包含了详细的中文注释，适合初学者学习使用
 
-~~除了学习使用外实用性基本为零~~
-
 ## 配置需求
+
 torch2.0或更高<br>
 sentencepiece库<br>
 galore-torch库<br>
+transformers库(仅用于加载 Adafactor 优化器)
 
 推荐使用python3.11<br>
-或者使用[subsoil](https://github.com/midway2333/subsoil)快速设置开发环境
+
 ## 代码
-### decoder
+
+### 主目录
+
 包含了模型、训练、运行的代码
+
 ### tokenizer
+
 包含了使用sentencepiece构建的分词器<br>
 
-|指标|spm_dict|spm_dict_v2|spm_dict_v2.1(尚未上传)|
-|    :----:   |    :----:   |     :----:    |     :----:    |
-|语言|中文|中文|中文|
-|训练数据大小|2GB|1.2GB|1.47GB|
-|训练数据类型|新闻|书籍|新闻、书籍|
-|词表大小|78336|78336|78336|
-|emoji|不支持|支持|支持|
+### utils
 
-在其它条件相同时使用不同分词器的训练损失：(左为spm_dict，右为spm_dict_v2)<br>
-![spm_dict](https://github.com/midway2333/tower_gpt/blob/main/png_box/v1.png)
-![spm_dict_v2](https://github.com/midway2333/tower_gpt/blob/main/png_box/v2.png)<br>
-
-相较于spm_dict，v2/v2.1的训练语料更加分散<br>
-但貌似spm_dict的分词效果更好
-
-### tools
 开发时使用的工具文件
 
-## 使用
-[train](https://github.com/midway2333/tower_gpt/blob/main/decoder/train.py)文件用于训练长文本<br>
-[talk_train](https://github.com/midway2333/tower_gpt/blob/main/decoder/talk_train.py)文件用于训练对话文本<br>
-送入jsonl文件进行训练<br>
+### img
 
-~~<a href="https://github.com/midway2333/tower_gpt/blob/main/decoder/generator_train.py">generator_train</a>文件用于大数据集训练(1GB以上)~~<br>
-~~送入jsonl文件进行训练~~<br>
-已弃用
+LOGO 图标
+
+## 使用
+
+[train](https://github.com/midway2333/tower_gpt/blob/main/train.py)文件用于训练<br>
+
+[generation](https://github.com/midway2333/tower_gpt/blob/main/generation.py)文件用于推理文本<br>
 
 ## 已知问题
 <details close> 
@@ -60,11 +54,6 @@ galore-torch库<br>
 <details open> 
 <summary>  <b>尚存在</b> </summary>
 - 此版本所有问题均已修复(`・ω・´)<br/>
-</details>
-
-<details open> 
-<summary>  <b>其他</b> </summary>
-- 推理代码随机性控制不足(只有温度采样)<br/>
 </details>
 
 ## 更新
@@ -154,14 +143,31 @@ galore-torch库<br>
 - 为模型添加 init 方法<br>
 </details>
 
-<details open> 
+<details close> 
 <summary>  <b>25.9.26更新</b> </summary>
 - 添加 padding 掩码<br>
 - 修复<a href="https://github.com/midway2333/tower_gpt/blob/main/decoder/dataset.py">dataset</a>错误<br>
 - 完善续训练
 </details>
 
+<details open> 
+<summary>  <b>25.12.21重大更新</b> </summary>
+- 完全重构训练、推理、dataset/dataloader文件<br>
+- 新的 tokenizer<br>
+- 新的工具文件结构<br>
+- 若干遗留问题修复
+
+</details>
+
+## TODO
+
+- DPO 训练代码
+- train grad-checkpoint 支持
+- train BLUE 评估支持
+
 ## 有关问题
+
 本项目虽然已经经过了一段时间的发展，但规范性与实用性依然无法看齐业界内的其它项目；如果您发现了任何新的问题或有关本项目的优化，欢迎在本项目的[issues](https://github.com/midway2333/tower_gpt/issues)中提出<br>
 [第二代Tower](https://github.com/midway2333/Tower2)已经开源！但本项目依然维持更新
+
 
