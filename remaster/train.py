@@ -32,20 +32,21 @@ import signal
 import sys
 
 # Dataset & DataLoader
-from remaster.dataset import TextDataProcessor
-from remaster.dataset import TextDataset, GeneratorTextDataset
-from remaster.dataset import MultiTurn_DialogueDataProcessor
-from remaster.dataset import Talk_DialogueDataset, Talk_GeneratorDialogueDataset
+from .dataset import TextDataProcessor
+from .dataset import TextDataset, GeneratorTextDataset
+from .dataset import MultiTurn_DialogueDataProcessor
+from .dataset import Talk_DialogueDataset, Talk_GeneratorDialogueDataset
+from .dataset import text_collate_fn
 
 # 模型类
-from remaster.model import transformer
+from .model import Tower_GPT
 
 # 配置文件
-from remaster.config import TrainerConfig
+from .config import TrainerConfig
 
 # 日志类
 import logging
-from remaster.logger import TrainLogger
+from .logger import TrainLogger
 
 
 class Trainer():
@@ -200,8 +201,8 @@ class Trainer():
 
         self.best_blue: float = -float("inf")
         """最佳 BLUE 分数"""
-        self.best_ppl: float = float("inf")
-        """最佳 PPL 分数"""
+        self.best_loss: float = float("inf")
+        """最佳损失值"""
 
         self.train_signal = False
         """用于判断模型是否进入训练流程"""
@@ -211,15 +212,13 @@ class Trainer():
         """分词器"""
         self.loss_fn = nn.CrossEntropyLoss(ignore_index=sp.pad_id())
         """损失函数"""
-        self.scaler = GradScaler() if self.mixed_precision != "full" else None
+        self.scaler = GradScaler() if self.mixed_precision == "fp16" else None
         """混合精度训练的梯度缩放器"""
 
         self.now_epoch = 0
         """当前轮数, 从 0 开始计数"""
         self.train_steps = 0
         """当前训练步数, 每次梯度更新时增加"""
-        self.all_epochs_steps = 0
-        """所有轮次的总训练步数"""
         self.local_steps = 0
         """当前数据加载步数"""
         self.info_steps = 0
@@ -229,13 +228,21 @@ class Trainer():
         self.need_skip = False
         """是否需要跳过批次"""
 
-        self._init_tensorboard()   # 初始化 TensorBoard
-        self._init_optimizer()     # 初始化优化器
-        self._init_dataloader()    # 初始化数据加载器
-        self._init_model()         # 初始化模型
+        self._init_model()          # 初始化模型
+        self._init_tensorboard()    # 初始化 TensorBoard
+        self._init_optimizer()      # 初始化优化器
+        self._init_dataloader()     # 初始化数据加载器
+        self._init_lr_scheduler()   # 初始化学习率调度器
+
+        if self.train_model_dir and self.train_model_name is not None and self.keep_train is not True:
+            self._load_from_base_model()   # 加载基础模型
 
         if self.keep_train:
             self._load_resume_page()   # 加载恢复页面
+            self._load_from_resume()   # 从恢复页面加载模型
+
+        self._is_finetune()   # 微调判定
+        # load_state_dict 会使 FT 失效, 这里最后加载 FT 状态
 
         signal.signal(signal.SIGINT, self.exit)
 
@@ -329,7 +336,7 @@ class Trainer():
 
     def _init_model(self):
         """初始化模型"""
-        self.model = transformer(
+        self.model = Tower_GPT(
             decoder_num=self.decoder_num,
             head_num=self.head_num,
             d=self.d,
@@ -382,6 +389,7 @@ class Trainer():
                 batch_size=self.batch_size,
                 shuffle=True,
                 num_workers=0,   # yield 下必须为 0
+                collate_fn=text_collate_fn if self.train_method == "text" else None,
             )   # 初始化训练数据加载器
 
         else:
@@ -396,6 +404,7 @@ class Trainer():
                 shuffle=True,
                 num_workers=self.num_workers,
                 pin_memory=self.pin_memory,
+                collate_fn=text_collate_fn if self.train_method == "text" else None,
             )   # 初始化训练数据加载器
 
         if self.valid_data_path:   # 初始化验证数据加载器
@@ -410,6 +419,7 @@ class Trainer():
                 shuffle=False,
                 num_workers=self.num_workers,
                 pin_memory=self.pin_memory,
+                collate_fn=text_collate_fn if self.train_method == "text" else None,
             )   # 初始化验证数据加载器
 
         else:
@@ -427,6 +437,7 @@ class Trainer():
                 shuffle=False,
                 num_workers=self.num_workers,
                 pin_memory=self.pin_memory,
+                collate_fn=text_collate_fn if self.train_method == "text" else None,
             )   # 初始化验证数据加载器
 
         else:
@@ -517,9 +528,9 @@ class Trainer():
         )   # 构建保存路径
 
         resume_page = {
-            "model_file": f"{self.output_model_name}_{suffix}.{self.model_suffix}",
-            "optimizer_file": f"{self.output_model_name}_{suffix}.{self.optimizer_suffix}",
-            "scheduler_file": f"{self.output_model_name}_{suffix}.{self.scheduler_suffix}" if self.scheduler_suffix else None,
+            "model_file": f"{self.output_model_name}_{suffix}{self.model_suffix}",
+            "optimizer_file": f"{self.output_model_name}_{suffix}{self.optimizer_suffix}",
+            "scheduler_file": f"{self.output_model_name}_{suffix}{self.scheduler_suffix}" if self.scheduler_suffix else None,
             "train_data_path": self.train_data_path,
             "valid_data_path": self.valid_data_path,
             "test_data_path": self.test_data_path,
@@ -536,7 +547,7 @@ class Trainer():
             "tensorboard": self.tensorboard,
             "tensorboard_dir": self.tensorboard_dir,
             "writer_name": self.writer_name,
-            "skip_steps": self.local_steps,   # 已经加载多少, 就跳过多少
+            "skip_steps": self.local_steps + 1,   # 已经加载多少, 就跳过多少
         }   # 恢复页面内容
 
         with open(save_path, "w", encoding="utf-8") as f:
@@ -747,41 +758,29 @@ class Trainer():
             self.logger.error(f"从恢复页加载模型和优化器状态失败: {e}")
             raise RuntimeError(f"从恢复页加载模型和优化器状态失败: {e}")
 
-    def load_checkpoint(self):
-        """加载检查点"""
-        if self.keep_train and self.train_model_dir and self.train_model_name is not None:
-            self.logger.debug("加载检查点")
-            try:
-                train_path = os.path.join(
-                    self.train_model_dir,
-                    self.train_model_name,
-                    self.model_suffix,
-                )   # 构建检查点路径
+    def _is_finetune(self):
+        """
+        微调判定, 冻结 embedding 层参数
+        """
+        if self.finetune:
+            layers_freeze = [self.model.embedding]
+            # 指定embedding层参数
 
-                self.model.load_state_dict(torch.load(train_path, map_location=self.device))
-                self.logger.info(f"成功加载检查点: {train_path}")
-                # 加载模型状态
+            for layer in layers_freeze:
+                for param in layer.parameters():
+                    param.requires_grad = False
+                # 冻结参数
 
-                if self.load_optimizer:   # 加载优化器状态
-                    try:
-                        optimizer_path = os.path.join(
-                            self.train_model_dir,
-                            self.train_model_name,
-                            self.optimizer_suffix,
-                        )   # 构建优化器检查点路径
+            self.logger.info("微调模式加载成功")
 
-                        self.optimizer.load_state_dict(torch.load(optimizer_path, map_location=self.device))
-                        self.logger.info(f"成功加载优化器检查点: {optimizer_path}")
+        else:
+            self.logger.info("非微调模式, 全部参数参与训练")
 
-                    except Exception as e:
-                        self.logger.error(f"加载优化器检查点失败: {e}")
-                        raise RuntimeError(f"加载优化器检查点失败: {e}")
+    def _grad_checkpoint(self):
+        """梯度检查点"""
+        pass   # TODO: 梯度检查点
 
-            except Exception as e:
-                self.logger.error(f"加载检查点失败: {e}")
-                raise RuntimeError(f"加载检查点失败: {e}")
-
-    def save_checkpoint(self, dir: str, suffix: str | int):
+    def _save_checkpoint(self, dir: str, suffix: str | int):
         """保存检查点
         
         参数:
@@ -794,23 +793,20 @@ class Trainer():
         save_path = os.path.join(
             self.output_dir,
             dir,
-            f"{self.output_model_name}_{suffix}",
-            self.model_suffix,
+            f"{self.output_model_name}_{suffix}{self.model_suffix}",
         )   # 构建保存路径
 
         save_optimizer_path = os.path.join(
             self.output_dir,
             dir,
-            f"{self.output_model_name}_{suffix}",
-            self.optimizer_suffix,
+            f"{self.output_model_name}_{suffix}{self.optimizer_suffix}",
         )   # 构建优化器保存路径
 
         if self.lr_scheduler is not None and self.scheduler_suffix is not None:
             save_scheduler_path = os.path.join(
                 self.output_dir,
                 dir,
-                f"{self.output_model_name}_{suffix}",
-                self.scheduler_suffix,
+                f"{self.output_model_name}_{suffix}{self.scheduler_suffix}",
             )   # 构建调度器保存路径
 
         os.makedirs(os.path.dirname(save_path), exist_ok=True)         # 确保目录存在
@@ -837,18 +833,18 @@ class Trainer():
             if new_val_blue > self.best_blue:   # BLUE 优先
                 self.best_blue = new_val_blue
                 self.best_loss = new_val_loss
-                self.save_checkpoint("best_checkpoint", "best_blue")
+                self._save_checkpoint("best_checkpoint", "best_blue")
                 self.logger.info(f"[BEST BLUE] 新最佳 BLUE 分数: {new_val_blue:.4f}, Loss: {new_val_loss:.4f}, 更新步数: {update_step}")
 
             if new_val_loss < self.best_loss:   # Loss 计算
                 self.best_loss = new_val_loss
-                self.save_checkpoint("best_checkpoint", "best_loss")
+                self._save_checkpoint("best_checkpoint", "best_loss")
                 self.logger.info(f"[BEST LOSS] 新最佳 BLUE 分数: {new_val_blue:.4f}, Loss: {new_val_loss:.4f}, 更新步数: {update_step}")
 
         else:
             if new_val_loss < self.best_loss:   # Loss 计算
                 self.best_loss = new_val_loss
-                self.save_checkpoint("best_checkpoint", "best_loss")
+                self._save_checkpoint("best_checkpoint", "best_loss")
                 self.logger.info(f"[BEST LOSS] 新最佳 Loss 分数: {new_val_loss:.4f}, 更新步数: {update_step}, 无 BLUE 分数")
 
     def delete_checkpoint(self, dir: str="time"):
@@ -908,46 +904,70 @@ class Trainer():
                 0, self.skip_steps
             )   # 设置跳过批次更新信息
 
-            self.skip_progress.update(self.main_skip_progress, show_info=skip_show_txt, advance=0)
+            self.train_progress.update(self.main_skip_progress, show_info=skip_show_txt, advance=0)
 
         for epoch in range(self.all_epochs):
             if epoch < self.now_epoch:
                 continue   # 跳过已经完成的轮次
 
-            self.train_one_epoch()
-            # 训练一个轮次
+            try:
+                self.train_signal = True   # 训练信号
+                self.train_one_epoch()
+                # 训练一个轮次
 
-            test_loss = self.test()
-            # 测试模型
+                test_loss = self.test()
+                # 测试模型
 
-            self.now_epoch += 1
-            # 轮次增加
+                self.now_epoch += 1
+                # 轮次增加
 
-            epoch_show_txt = 'epoch: {}/{}'.format(
-                self.now_epoch, self.all_epochs
-            )   # 设置epoch更新信息
+                epoch_show_txt = 'epoch: {}/{}'.format(
+                    self.now_epoch, self.all_epochs
+                )   # 设置epoch更新信息
 
-            self.train_progress.update(self.epoch_progress, show_info=epoch_show_txt, advance=1)
-            # 更新epoch信息与进度条
+                self.train_progress.update(self.epoch_progress, show_info=epoch_show_txt, advance=1)
+                # 更新epoch信息与进度条
 
-            self.save_checkpoint("epoch", f"epoch_{self.now_epoch}_step_{self.train_steps}")
-            # 保存检查点
+                self._save_checkpoint("epoch", f"epoch_{self.now_epoch}_step_{self.train_steps}")
+                # 保存检查点
 
-            if test_loss is not None and self.save_best_checkpoint:
-                self.check_best_checkpoint(None, test_loss, self.train_steps)
-                # 保存最佳检查点
+            except Exception as e:
+                now = datetime.now().strftime("%Y%m%d_%H%M%S")
+                save_dir = os.path.join("exit_save", now+"_exit_ckpt")
+                os.makedirs(save_dir, exist_ok=True)
+                # 构建错误备份目录
+
+                self.train_progress.stop()
+                # 停止训练进度条
+
+                self._save_resume_page(
+                    save_dir,
+                    f"error_{now}",
+                    now
+                )   # 保存恢复页面
+
+                self.logger.error(f"训练轮次 {epoch} 失败: {e}")
+                self.train_signal = False   # 训练信号
+                raise e
+
+        self._save_checkpoint("epoch", f"final")
+        self.train_signal = False   # 训练信号
+        self.train_progress.stop()
+        # 停止训练进度条
+
+        self.logger.info("训练完成!")
 
     def train_one_epoch(self):
         """训练一个轮次"""
         total_loss = 0.0
         info_loss = 0.0
-
-        # for step in range(self.skip_steps):
-        #     next(self.train_dataloader)  # 丢弃这些批次
-        #     if hasattr(self, 'skip_progress'):
-        #         self.skip_progress.update(1)
-
         for step, (x, y, loss_mask) in enumerate(self.train_dataloader):   # 生成步进索引
+            if step < self.skip_steps and self.need_skip:
+                self.train_progress.update(self.main_skip_progress, advance=1)
+                continue
+            else:
+                self.need_skip = False
+
             x: Tensor = x.to(self.device).long()
             y: Tensor = y.to(self.device).long() 
             loss_mask: Tensor | None = loss_mask.to(self.device).float() if loss_mask is not None else None
@@ -983,12 +1003,11 @@ class Trainer():
                     self.optimizer.step()
 
                 self.optimizer.zero_grad(set_to_none=True)
-                self.all_epochs_steps += 1
                 self.train_steps += 1
                 # 梯度清空
 
                 if self.writer is not None and self.writer_name is not None:
-                    self.writer.add_scalar(self.writer_name+'_train_loss', loss.item(), self.all_epochs_steps)
+                    self.writer.add_scalar(self.writer_name+'_train_loss', loss.item(), self.train_steps)
                     # 记录训练损失
 
                 if self.rate_scheduler is not None:
@@ -1024,7 +1043,7 @@ class Trainer():
                 eval_loss = self.evaluate()
                 # 评估模型
 
-                self.save_checkpoint("time", f"epoch_{self.now_epoch}_step_{self.train_steps}")
+                self._save_checkpoint("time", f"epoch_{self.now_epoch}_step_{self.train_steps}")
                 # 保存检查点
 
                 self.delete_checkpoint("time")
@@ -1033,6 +1052,9 @@ class Trainer():
                 if eval_loss is not None and self.save_best_checkpoint:
                     self.check_best_checkpoint(None, eval_loss, self.train_steps)
                     # 保存最佳检查点
+
+        self.optimizer.zero_grad()
+        # 清空梯度
 
     def evaluate(self):
         if self.valid_dataloader is not None:
@@ -1044,6 +1066,10 @@ class Trainer():
 
                 with torch.no_grad():  # 不需要计算梯度
                     for tx, ty, t_mask in self.valid_dataloader:
+                        tx: Tensor = tx.to(self.device).long()
+                        ty: Tensor = ty.to(self.device).long() 
+                        t_mask: Tensor | None = t_mask.to(self.device).float() if t_mask is not None else None
+
                         test_loss = self._forward_calc(tx, ty, t_mask)
                         epoch_test_loss += test_loss.item()
                         # 同上
@@ -1086,6 +1112,10 @@ class Trainer():
 
                 with torch.no_grad():  # 不需要计算梯度
                     for tx, ty, t_mask in self.test_dataloader:
+                        tx: Tensor = tx.to(self.device).long()
+                        ty: Tensor = ty.to(self.device).long() 
+                        t_mask: Tensor | None = t_mask.to(self.device).float() if t_mask is not None else None
+
                         test_loss = self._forward_calc(tx, ty, t_mask)
                         epoch_test_loss += test_loss.item()
                         # 同上
@@ -1106,10 +1136,10 @@ class Trainer():
             # TODO: BLUE 评估
 
             if self.writer is not None and self.writer_name is not None:   # 记录测试损失
-                self.writer.add_scalar(self.writer_name+'_test', self.avg_test_loss, self.train_steps)
+                self.writer.add_scalar(self.writer_name+'_test', self.avg_test_loss, self.now_epoch)
 
                 if self.ppl_eval:   # 记录测试 PPL
-                    self.writer.add_scalar(self.writer_name+'_test_ppl', avg_test_ppl, self.train_steps)
+                    self.writer.add_scalar(self.writer_name+'_test_ppl', avg_test_ppl, self.now_epoch)
 
             self.model.train()
             return self.avg_test_loss
@@ -1245,21 +1275,8 @@ class Trainer():
 
     def _init_skip_progess(self):
         """跳过批次进度条"""
-        progress = Progress(
-            TextColumn("[progress.description]{task.description}"),   # 显示任务的描述信息
-            BarColumn(),   # 显示进度条
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),   # 设置样式,保留三位数的整数百分比,右对齐
-            TimeRemainingColumn(),   # 显示基于当前进度推测估计的剩余时间
-            TimeElapsedColumn(),   # 显示运行时间
-            TextColumn("[bold blue]{task.fields[show_info]}"),   # 额外信息
-            refresh_per_second=1,  # 每1秒钟更新一次
-        )
-
-        self.main_skip_progress = progress.add_task(description='skipping: ', show_info='', total=self.skip_steps)
+        self.main_skip_progress = self.train_progress.add_task(description='skipping: ', show_info='', total=self.skip_steps)
         # 跳过批次进度条
-
-        self.skip_progress = progress   # 对象化进度条
-        self.skip_progress.start()   # 启动进度条
 
     def exit(self, signum, frame):
         """进程退出时调用
@@ -1275,7 +1292,7 @@ class Trainer():
                 now = datetime.now().strftime("%Y%m%d_%H%M%S")
                 save_dir = os.path.join("exit_save", now+"_exit_ckpt")
                 os.makedirs(save_dir, exist_ok=True)
-                self.save_checkpoint(
+                self._save_checkpoint(
                     dir=save_dir,
                     suffix=f"exit_{now}",
                 )   # 保存检查点

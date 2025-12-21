@@ -200,7 +200,7 @@ class decoder(nn.Module):
         return (final_output, mask)
 
 
-class transformer(nn.Module):   # 模型实现
+class Tower_GPT(nn.Module):   # 模型实现
     """语言模型"""
     def __init__(self, decoder_num=8, head_num=8, d=1024, dk=128, dff=4096, vocab_size=32768,   \
         padding_idx=3, device: str='cuda' if torch.cuda.is_available() else 'cpu', init: bool=True, dropout: float=0.0):
@@ -340,7 +340,7 @@ if __name__ == '__main__':
     def count_parameters(model):
         return sum(p.numel() for p in model.parameters())
     
-    model = transformer(decoder_num=12, head_num=8, d=1024, dk=128, dff=4096, vocab_size=32768, padding_idx=3, device='cpu')
+    model = Tower_GPT(decoder_num=12, head_num=8, d=1024, dk=128, dff=4096, vocab_size=32768, padding_idx=3, device='cpu')
     input = torch.tensor([[1, 2, 3], [4, 5, 6]]).to('cpu')
     model.eval()
     output = model(input)

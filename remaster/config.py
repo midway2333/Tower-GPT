@@ -97,7 +97,7 @@ class TrainerConfig():
     """检查点路径, 可选值为 None 或 检查点路径"""
     finetune: bool = False
     """是否微调模型"""
-    compile: bool = True
+    compile: bool = False
     """是否使用 torch.compile 编译模型加速训练"""
     load_optimizer: bool = False
     """是否加载优化器, 用于续训练"""

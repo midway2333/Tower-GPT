@@ -319,10 +319,10 @@ class Generation:
         # 加载模型权重并设置为评估模式
 
 if __name__ == '__main__':
-    from model import transformer
+    from model import Tower_GPT
     
     # 加载模型
-    model = transformer(
+    model = Tower_GPT(
         decoder_num=4,
         head_num=4,
         d=1024,

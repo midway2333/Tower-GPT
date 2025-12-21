@@ -151,6 +151,19 @@ class GeneratorTextDataset(IterableDataset):   # 负责生成器模式下加载�
 
     def __iter__(self):   # 返回一个迭代器对象,每次迭代时从生成器中获取下一个样本
         return iter(self.processor.data_generator())
+    
+def text_collate_fn(batch):
+    """
+    处理 (x, y, None) 的 batch
+    返回:
+    - (x_stacked, y_stacked, None)
+    """
+    xs, ys, _ = zip(*batch)
+    xs = torch.stack(xs)
+    ys = torch.stack(ys)
+    # 堆叠 x 和 y
+
+    return xs, ys, None
 
 """ ------------------------------------- 以上对话文本dataset ------------------------------------- """
 
