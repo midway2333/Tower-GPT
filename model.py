@@ -340,7 +340,7 @@ if __name__ == '__main__':
     def count_parameters(model):
         return sum(p.numel() for p in model.parameters())
     
-    model = Tower_GPT(decoder_num=12, head_num=8, d=1024, dk=128, dff=4096, vocab_size=32768, padding_idx=3, device='cpu')
+    model = Tower_GPT(decoder_num=6, head_num=6, d=384, dk=64, dff=1536, vocab_size=32768, padding_idx=3, device='cpu')
     input = torch.tensor([[1, 2, 3], [4, 5, 6]]).to('cpu')
     model.eval()
     output = model(input)

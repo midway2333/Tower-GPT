@@ -32,21 +32,21 @@ import signal
 import sys
 
 # Dataset & DataLoader
-from .dataset import TextDataProcessor
-from .dataset import TextDataset, GeneratorTextDataset
-from .dataset import MultiTurn_DialogueDataProcessor
-from .dataset import Talk_DialogueDataset, Talk_GeneratorDialogueDataset
-from .dataset import text_collate_fn
+from dataset import TextDataProcessor
+from dataset import TextDataset, GeneratorTextDataset
+from dataset import MultiTurn_DialogueDataProcessor
+from dataset import Talk_DialogueDataset, Talk_GeneratorDialogueDataset
+from dataset import text_collate_fn
 
 # 模型类
-from .model import Tower_GPT
+from model import Tower_GPT
 
 # 配置文件
-from .config import TrainerConfig
+from train_config import TrainerConfig
 
 # 日志类
 import logging
-from .logger import TrainLogger
+from log_utils import TrainLogger
 
 
 class Trainer():
@@ -228,6 +228,7 @@ class Trainer():
         self.need_skip = False
         """是否需要跳过批次"""
 
+        self.print_info()           # 打印训练配置信息
         self._init_model()          # 初始化模型
         self._init_tensorboard()    # 初始化 TensorBoard
         self._init_optimizer()      # 初始化优化器
@@ -267,7 +268,7 @@ class Trainer():
             std_level=std_level,
             file_level=file_level,
             std_out=self.std_out,
-            save_info=self.save_info,
+            file_out=self.save_info,
             output_dir=self.output_dir,
             file_name=self.file_name,
         )   # 构建日志记录器
@@ -276,28 +277,6 @@ class Trainer():
         """检查设备信息"""
         assert self.device in ["cpu", "cuda", "xpu", "mps","auto"], f"设备必须是 'cpu', 'cuda', 'xpu', 'mps' 或 'auto', 但得到 {self.device}"
         # 断言设备信息无误
-
-        if self.device == "auto":   # 自动选择设备
-            if torch.cuda.is_available():
-                self.device = "cuda"
-                self.logger.info("AUTO: 成功加载 Nvidia CUDA")
-
-            elif torch.xpu.is_available():
-                self.device = "xpu"
-                self.logger.info("AUTO: 成功加载 Intel XPU")
-
-            elif torch.backends.mps.is_available():
-                self.device = "mps"
-                self.logger.info("AUTO: 成功加载 Apple MPS")
-
-            else:
-                if torch.cpu.is_available():
-                    self.device = "cpu"
-                    self.logger.info("AUTO: 成功加载 CPU")
-                    self.logger.warning("AUTO: 未检测到任何可行的加速方式, 自动选择 CPU; 训练可能受影响")
-
-                else:
-                    raise RuntimeError("AUTO: 未检测到可用设备; 请检查设备配置")
 
         if self.device == "cuda":   # 手动选择 CUDA
             if torch.cuda.is_available():
@@ -333,6 +312,28 @@ class Trainer():
                 raise RuntimeError("CPU 加载失败; 请检查设备")
             # 尽管 torch.cpu.is_available() 在一般情况下恒为 True
             # 此处为保持设备检查逻辑统一仍使用该判断
+
+        if self.device == "auto":   # 自动选择设备
+            if torch.cuda.is_available():
+                self.device = "cuda"
+                self.logger.info("AUTO: 成功加载 Nvidia CUDA")
+
+            elif torch.xpu.is_available():
+                self.device = "xpu"
+                self.logger.info("AUTO: 成功加载 Intel XPU")
+
+            elif torch.backends.mps.is_available():
+                self.device = "mps"
+                self.logger.info("AUTO: 成功加载 Apple MPS")
+
+            else:
+                if torch.cpu.is_available():
+                    self.device = "cpu"
+                    self.logger.info("AUTO: 成功加载 CPU")
+                    self.logger.warning("AUTO: 未检测到任何可行的加速方式, 自动选择 CPU; 训练可能受影响")
+
+                else:
+                    raise RuntimeError("AUTO: 未检测到可用设备; 请检查设备配置")
 
     def _init_model(self):
         """初始化模型"""
@@ -378,72 +379,111 @@ class Trainer():
                 block_size=self.block_size,
             )
 
+        self.logger.debug(f"Train DataProcessor 加载完成")
+
         if self.yield_load:
+            self.logger.debug(f"使用 Yield 方式加载数据")
+
             if self.train_method == "text":
                 self.train_dataset = GeneratorTextDataset(self.processor)   # type: ignore
             elif self.train_method == "chat":
-                self.train_dataset = Talk_DialogueDataset(self.processor)   # type: ignore
+                self.train_dataset = Talk_GeneratorDialogueDataset(self.processor)   # type: ignore
+
+            self.logger.debug(f"Train Dataset 加载完成")
 
             self.train_dataloader = DataLoader(
                 self.train_dataset,
                 batch_size=self.batch_size,
-                shuffle=True,
+                shuffle=False,
                 num_workers=0,   # yield 下必须为 0
                 collate_fn=text_collate_fn if self.train_method == "text" else None,
             )   # 初始化训练数据加载器
 
         else:
+            self.logger.debug(f"使用普通方式加载数据")
+
             if self.train_method == "text":
                 self.train_dataset = TextDataset(self.processor)   # type: ignore
             elif self.train_method == "chat":
                 self.train_dataset = Talk_DialogueDataset(self.processor)   # type: ignore
 
+            self.logger.debug(f"Train Dataset 加载完成")
+
             self.train_dataloader = DataLoader(
                 self.train_dataset,
-                batch_size=self.batch_size,
-                shuffle=True,
-                num_workers=self.num_workers,
-                pin_memory=self.pin_memory,
-                collate_fn=text_collate_fn if self.train_method == "text" else None,
-            )   # 初始化训练数据加载器
-
-        if self.valid_data_path:   # 初始化验证数据加载器
-            if self.train_method == "text":
-                self.valid_dataset = TextDataset(self.processor)   # type: ignore
-            elif self.train_method == "chat":
-                self.valid_dataset = Talk_DialogueDataset(self.processor)   # type: ignore
-
-            self.valid_dataloader = DataLoader(
-                self.valid_dataset,
                 batch_size=self.batch_size,
                 shuffle=False,
                 num_workers=self.num_workers,
                 pin_memory=self.pin_memory,
                 collate_fn=text_collate_fn if self.train_method == "text" else None,
-            )   # 初始化验证数据加载器
+            )   # 初始化训练数据加载器
+
+        self.logger.debug(f"Train DataLoader 加载完成")
+
+        if self.valid_data_path:   # 初始化验证数据加载器
+            if self.train_method == "text":
+                valid_processor = TextDataProcessor(
+                    json_file=self.valid_data_path,
+                    sp_model_path=self.tokenizer_path,
+                    block_size=self.block_size,
+                )
+                valid_dataset = TextDataset(valid_processor)
+
+            elif self.train_method == "chat":
+                valid_processor = MultiTurn_DialogueDataProcessor(
+                    json_file=self.valid_data_path,
+                    sp_model_path=self.tokenizer_path,
+                    block_size=self.block_size,
+                )
+                valid_dataset = Talk_DialogueDataset(valid_processor)
+
+            self.valid_dataloader = DataLoader(
+                valid_dataset,
+                batch_size=self.batch_size,
+                shuffle=False,
+                num_workers=self.num_workers,
+                pin_memory=self.pin_memory,
+                collate_fn=text_collate_fn if self.train_method == "text" else None,
+            )
+
+            self.logger.debug(f"Valid DataLoader 加载完成")
 
         else:
             self.valid_dataloader = None
 
         if self.test_data_path:   # 初始化测试数据加载器
             if self.train_method == "text":
-                self.test_dataset = TextDataset(self.processor)   # type: ignore
+                test_processor = TextDataProcessor(
+                    json_file=self.test_data_path,
+                    sp_model_path=self.tokenizer_path,
+                    block_size=self.block_size,
+                )
+                test_dataset = TextDataset(test_processor)
+
             elif self.train_method == "chat":
-                self.test_dataset = Talk_DialogueDataset(self.processor)   # type: ignore
+                test_processor = MultiTurn_DialogueDataProcessor(
+                    json_file=self.test_data_path,
+                    sp_model_path=self.tokenizer_path,
+                    block_size=self.block_size,
+                )
+                test_dataset = Talk_DialogueDataset(test_processor)
 
             self.test_dataloader = DataLoader(
-                self.test_dataset,
+                test_dataset,
                 batch_size=self.batch_size,
                 shuffle=False,
                 num_workers=self.num_workers,
                 pin_memory=self.pin_memory,
                 collate_fn=text_collate_fn if self.train_method == "text" else None,
-            )   # 初始化验证数据加载器
+            )
+
+            self.logger.debug(f"Test DataLoader 加载完成")
 
         else:
             self.test_dataloader = None
 
         self.data_length = self.processor.data_length()   # 训练数据集长度
+        self.logger.info(f"数据集加载完成")
 
     def _init_optimizer(self):
         """初始化优化器"""
@@ -928,7 +968,7 @@ class Trainer():
                 self.train_progress.update(self.epoch_progress, show_info=epoch_show_txt, advance=1)
                 # 更新epoch信息与进度条
 
-                self._save_checkpoint("epoch", f"epoch_{self.now_epoch}_step_{self.train_steps}")
+                self._save_checkpoint(f"epoch/epoch{self.now_epoch}", f"epoch_{self.now_epoch}")
                 # 保存检查点
 
             except Exception as e:
@@ -1007,7 +1047,7 @@ class Trainer():
                 # 梯度清空
 
                 if self.writer is not None and self.writer_name is not None:
-                    self.writer.add_scalar(self.writer_name+'_train_loss', loss.item(), self.train_steps)
+                    self.writer.add_scalar(self.writer_name+'_train_loss', total_loss, self.train_steps)
                     # 记录训练损失
 
                 if self.rate_scheduler is not None:
@@ -1043,14 +1083,14 @@ class Trainer():
                 eval_loss = self.evaluate()
                 # 评估模型
 
-                self._save_checkpoint("time", f"epoch_{self.now_epoch}_step_{self.train_steps}")
+                self._save_checkpoint(f"time/step{self.info_steps}", f"epoch_{self.now_epoch}_step_{self.info_steps}")
                 # 保存检查点
 
                 self.delete_checkpoint("time")
                 # 删除旧检查点
 
                 if eval_loss is not None and self.save_best_checkpoint:
-                    self.check_best_checkpoint(None, eval_loss, self.train_steps)
+                    self.check_best_checkpoint(None, eval_loss, self.info_steps)
                     # 保存最佳检查点
 
         self.optimizer.zero_grad()

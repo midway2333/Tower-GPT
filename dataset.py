@@ -209,7 +209,7 @@ class MultiTurn_DialogueDataProcessor:
             return None   # 输入验证检查
 
         token_ids = [self.bos_id]   # 整个序列开头只加一次 <s>
-        loss_mask = [0]             # 损失掩码，0表示忽略loss，1表示计算loss
+        loss_mask = [0]             # 损失掩码, 0表示忽略loss, 1表示计算loss
 
         for msg in messages:   # 检查消息结构
             if not (isinstance(msg, dict) and "role" in msg and "content" in msg):
@@ -246,9 +246,9 @@ class MultiTurn_DialogueDataProcessor:
             loss_mask = loss_mask[1:] + [0] * (self.block_size - len(token_ids) + 1)  # 填充部分不计算loss
 
         return (
-            torch.tensor(input_ids, dtype=torch.long), 
-            torch.tensor(target_ids, dtype=torch.long),
-            torch.tensor(loss_mask, dtype=torch.float)  # 返回损失掩码
+            torch.tensor(input_ids, dtype=torch.int32), 
+            torch.tensor(target_ids, dtype=torch.int32),
+            torch.tensor(loss_mask, dtype=torch.int32)  # 返回损失掩码
         )
 
     def load_and_encode_data(self):
@@ -277,7 +277,7 @@ class MultiTurn_DialogueDataProcessor:
             for line in f:
                 line = line.strip()
                 record = json.loads(line)
-            # 读取jsonl文件
+                # 读取jsonl文件
 
                 result = self._process_single_dialogue(record)
                 # 处理单轮对话数据
