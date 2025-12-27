@@ -59,6 +59,9 @@ LOGO 图标
 ## 更新
 
 <details close> 
+<summary>  <b>2024年度维护</b> </summary>
+
+<details close> 
 <summary>  <b>8.31更新</b> </summary>
 - 上传了<a href="https://github.com/midway2333/tower_gpt/blob/main/decoder/train.py">training</a>文件，新文件修复了<a href="https://github.com/midway2333/tower_gpt/blob/main/decoder/tfer_dataloader.py">tfer_dataloader</a>中的问题，同时为训练中添加了梯度裁剪，提高了代码在大数据量下的训练效率<br/>
 </details>
@@ -112,8 +115,13 @@ LOGO 图标
 - 代码注释优化<br/>
 </details>
 
+</details>
+
 <details close> 
-<summary>  <b>25.1.5更新</b> </summary>
+<summary>  <b>2025年度维护</b> </summary>
+
+<details close> 
+<summary>  <b>1.5更新</b> </summary>
 - 为<a href="https://github.com/midway2333/tower_gpt/blob/main/decoder/train.py">train</a>与<a href="https://github.com/midway2333/tower_gpt/blob/main/decoder/generator_train.py">generator_train</a>添加优化器续存支持(修复断点续训会在开始时出现loss增加的情况)<br>
 - 修改<a href="https://github.com/midway2333/tower_gpt/blob/main/decoder/model.py">模型文件</a>的Post layer normalization为Pre layer normalization<br>
 - 修改了模型预设参数<br>
@@ -121,7 +129,7 @@ LOGO 图标
 </details>
 
 <details close> 
-<summary>  <b>25.3.2更新</b> </summary>
+<summary>  <b>3.2更新</b> </summary>
 - 重构<a href="https://github.com/midway2333/tower_gpt/blob/main/decoder/train.py">train</a>与<a href="https://github.com/midway2333/tower_gpt/blob/main/decoder/talk_train.py">talk_train</a>代码文件，增加了一些新功能<br>
 - 修复<a href="https://github.com/midway2333/tower_gpt/blob/main/decoder/dataset.py">dataset</a>在加载器下无法遍历完整数据的问题<br>
 - <a href="https://github.com/midway2333/tower_gpt/blob/main/decoder/dataset.py">dataset</a>添加对</a>与<a href="https://github.com/midway2333/tower_gpt/blob/main/decoder/talk_train.py">talk_train</a>的数据加载支持<br>
@@ -130,28 +138,38 @@ LOGO 图标
 </details>
 
 <details close> 
-<summary>  <b>25.9.6更新</b> </summary>
+<summary>  <b>9.6更新</b> </summary>
 - 剔除了一些不必要的线性偏置<br>
 - 修复训练文件的进度条预测时间显示问题<br>
 - <del>我就说项目还会更新的吧.jpg</del> <br>
 </details>
 
 <details close> 
-<summary>  <b>25.9.13更新</b> </summary>
+<summary>  <b>9.13更新</b> </summary>
 - 重构多头，提高并行效率<br>
 - 修改位置编码为内嵌式RoPE<br>
 - 为模型添加 init 方法<br>
 </details>
 
 <details close> 
-<summary>  <b>25.9.26更新</b> </summary>
+<summary>  <b>9.26更新</b> </summary>
 - 添加 padding 掩码<br>
 - 修复<a href="https://github.com/midway2333/tower_gpt/blob/main/decoder/dataset.py">dataset</a>错误<br>
 - 完善续训练
 </details>
 
+<details close> 
+<summary>  <b>12.27更新</b> </summary>
+- 修复 ChatDataloader 流式加载错误<br>
+- 优化 logger 逻辑
+- 重命名 logger 与 config<br>
+- 优化检查点保存逻辑
+</details>
+
+</details>
+
 <details open> 
-<summary>  <b>25.12.21重大更新</b> </summary>
+<summary>  <b>2025.12.21重大更新</b> </summary>
 - 完全重构训练，推理，dataset/dataloader文件<br>
 - 新的 tokenizer<br>
 - 新的工具文件结构<br>
@@ -169,4 +187,5 @@ LOGO 图标
 
 本项目虽然已经经过了一段时间的发展，但规范性与实用性依然无法看齐业界内的其它项目；如果您发现了任何新的问题或有关本项目的优化，欢迎在本项目的[issues](https://github.com/midway2333/tower_gpt/issues)中提出<br>
 [第二代Tower](https://github.com/midway2333/Tower2)已经开源！但本项目依然维持更新
+
 
