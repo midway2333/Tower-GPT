@@ -168,10 +168,6 @@ class decoder(nn.Module):
         self.multi_head = MHA(d, dk, head_num, device=device, dropout=self.dropout)
         # 多头注意力机制
 
-        self.o = nn.Linear(head_num * dk, d)
-        # 将多头注意力机制的输出合并成一个单一的输出
-        # 输入维度是head_num * dk,输出维度是d
-
         self.norm1 = nn.LayerNorm(d)   # 层归一化
 
         self.ffn = nn.Sequential(             # 前馈网络
