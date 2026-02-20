@@ -210,7 +210,7 @@ class Trainer():
         sp = spm.SentencePieceProcessor()
         self.tokenizer = sp.Load(self.tokenizer_path)
         """分词器"""
-        self.loss_fn = nn.CrossEntropyLoss(ignore_index=sp.pad_id())
+        self.loss_fn = nn.CrossEntropyLoss(ignore_index=sp.pad_id(), reduction='none')
         """损失函数"""
         self.scaler = GradScaler() if self.mixed_precision == "fp16" else None
         """混合精度训练的梯度缩放器"""
@@ -1327,6 +1327,7 @@ class Trainer():
         """
         if self.train_signal:
             choice = input("你正在使用 `Ctrl+C` 中断训练, 是否保存检查点? (y/n): ")
+            self.train_progress.stop()
 
             if choice.lower() == 'y':
                 now = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1344,15 +1345,12 @@ class Trainer():
                 )    # 保存恢复页面
 
                 self.logger.info(f"退出训练, 检查点已保存至 {save_dir}")
-                self.train_progress.stop()
                 sys.exit(0)
 
             else:
                 self.logger.info("退出训练, 不保存检查点")
-                self.train_progress.stop()
                 sys.exit(0)
 
         else:
             self.logger.info("未在训练阶段, 退出进程")
-            self.train_progress.stop()
             sys.exit(0)
