@@ -3,15 +3,15 @@ from train_config import TrainerConfig
 
 cfg = TrainerConfig(
     # 模型架构配置
-    decoder_num=6,
-    head_num=6,
-    d=384,
+    decoder_num=8,
+    head_num=8,
+    d=768,
     dk=64,
-    dff=1536,
+    dff=4096,
     vocab_size=32768,
     
     # 训练器配置
-    train_method="chat",  # 蒸馏数据通常是对话格式
+    train_method="simpo",
     keep_train=False,
     ckpt_path=None,
     finetune=False,
@@ -24,34 +24,34 @@ cfg = TrainerConfig(
     
     # 模型路径配置
     train_model_dir=None,  # 从头开始训练
-    train_model_name=None,
+    train_model_name=None,  # 从头开始训练
     output_dir="./output",
-    output_model_name="tower_gpt_23m_distilled",
+    output_model_name="",
     model_suffix=".bin",
     optimizer_suffix=".pt",
     scheduler_suffix=".sdl",
-    max_checkpoints=5,  # 多保存几个方便选择
+    max_checkpoints=3,
     save_best_checkpoint=True,
     
     # 数据集配置
-    train_data_path="data\\sft.jsonl",  # 你的1GB蒸馏数据
-    valid_data_path="data\\val.jsonl",  # 建议保留10%作为验证集
+    train_data_path="data\\dpo.jsonl",
+    valid_data_path=None,
     test_data_path=None,
-    tokenizer_path="tokenizer\\tower_dict_v2.4_32768.model",  # 分词器路径
-    num_workers=0,  # 小数据量不需要太多worker
+    tokenizer_path="tokenizer\\tower_dict_v2.4_32768.model",
+    num_workers=0,
     pin_memory=True,
     yield_load=True,
 
     # 训练参数配置
-    all_epochs=4,  # 蒸馏数据可以多训几轮
-    batch_size=8,
-    block_size=512,  # 适合对话长度
-    accumulation_steps=16,  # 有效batch = 32×4 = 128
-    info_update_interval=2048,  # 更频繁地监控
+    all_epochs=2,
+    batch_size=4,
+    block_size=512,
+    accumulation_steps=1,
+    info_update_interval=128,
     
     # 优化器配置
     optimizer="adamw",
-    learning_rate=3e-4,  # 比标准预训练稍低
+    learning_rate=2e-8,  # 比标准预训练稍低
     betas=(0.9, 0.999),
     eps=1e-8,
     weight_decay=0.01,  # 较强的权重衰减防过拟合
@@ -59,26 +59,30 @@ cfg = TrainerConfig(
     # 学习率调度器
     lr_scheduler=True,
     pct_start=0.1,  # 10% warmup
-    max_lr_rate=15.0,  # 保守的峰值
-    div_factor=75.0,
+    max_lr_rate=4.0,  # 保守的峰值
+    div_factor=4.0,
     anneal_strategy="cos",
     
+    # RL 配置
+    rl_beta=2.5,
+    gamma=1.2,
+
     # 模型技术参数配置
     grad_clip=1.0,  # 梯度裁剪稳定训练
-    grad_checkpoint=False,  # 23M模型不需要
-    dropout=0.2,  # 较高的dropout防过拟合
+    grad_checkpoint=False,
+    dropout=0.1,
     
     # 评估配置
     ppl_eval=True,
-    bleu_eval=False,  # 对话模型评估BLEU
+    bleu_eval=False,
     
     # 可视化配置
     tensorboard=True,
-    tensorboard_dir="./tensorboard",  # 会自动使用./runs/{output_model_name}
-    writer_name="distill_train",
+    tensorboard_dir="./tensorboard",
+    writer_name="trainer",
     
     # 日志配置
-    logger_name="distill_trainer",
+    logger_name="rl_trainer",
     std_level="info",
     file_level="debug",
     std_out=True,

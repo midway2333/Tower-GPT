@@ -13,7 +13,7 @@ class TrainerConfig():
         vocab_size (int): 词表大小
         dropout (float): dropout 概率
 
-        train_method (str): 训练方式, 可选值为 "text" 或 "chat"
+        train_method (str): 训练方式, 可选值为 "text" , "chat" , "dpo" , "ipo" 或 "simpo"
         keep_train (bool): 是否从检查点续训练
         ckpt_path (str | None): 检查点路径, 可选值为 None 或 检查点路径
         finetune (bool): 是否微调模型
@@ -59,7 +59,11 @@ class TrainerConfig():
         anneal_strategy (str): 学习率调度器的退火策略, 可选值为 "linear" 或 "cos"
 
         grad_clip (float | None): 梯度裁剪值, 可选值为 None 或 梯度裁剪值
+        grad_checkpoint (bool): 是否使用梯度检查点技术节省显存
         dropout (float):  dropout 概率, 正则化选项
+
+        rl_beta (float): RL 训练的超参数 beta, 用于控制奖励大小; 此项在 IPO 中对应 tau
+        gamma (float): SimPO 的超参数 gamma, 此项用于控制奖励的目标边际, 一般取 0.8 ~ 1.6
 
         ppl_eval (bool): 是否在验证集上评估困惑度
         bleu_eval (bool): 是否在验证集上评估 BLEU-4 分数
@@ -89,8 +93,8 @@ class TrainerConfig():
     """词表大小"""
 
     # 训练器配置
-    train_method: Literal["text", "chat"] = "text"
-    """训练方式, 可选值为 "text" 或 "chat" """
+    train_method: Literal["text", "chat", "dpo", "ipo", "simpo"] = "text"
+    """训练方式, 可选值为 "text" "chat" "dpo" "ipo" 或 "simpo" """
     keep_train: bool = False
     """是否从检查点续训练"""
     ckpt_path: str | None = None
@@ -185,6 +189,12 @@ class TrainerConfig():
     """是否使用梯度检查点技术节省显存"""
     dropout: float = 0.1
     """dropout 概率, 正则化选项"""
+
+    # RL 训练参数配置
+    rl_beta: float = 0.1
+    """RL 训练的超参数 beta, 用于控制奖励大小; 此项在 IPO 中对应 tau; 在 SimPO 中对应 gamma (通常取 2.0 ~ 3.0)"""
+    gamma: float = 1.2
+    """SimPO 的超参数 gamma, 此项用于控制奖励的目标边际, 一般取 0.8 ~ 1.6"""
 
     # 评估配置
     ppl_eval: bool = True

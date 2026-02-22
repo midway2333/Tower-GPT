@@ -4,6 +4,7 @@ import json
 import numpy as np
 import os, shutil
 import math
+import copy
 
 # 用于可视化的库
 from rich.progress import Progress, TextColumn, BarColumn, TimeRemainingColumn, TimeElapsedColumn
@@ -36,7 +37,11 @@ from dataset import TextDataProcessor
 from dataset import TextDataset, GeneratorTextDataset
 from dataset import MultiTurn_DialogueDataProcessor
 from dataset import Talk_DialogueDataset, Talk_GeneratorDialogueDataset
+from dataset import RLDataProcessor
+from dataset import RLDataset, RLGeneratorDataset
+
 from dataset import text_collate_fn
+from dataset import rl_collate_fn
 
 # 模型类
 from model import Tower_GPT
@@ -167,6 +172,12 @@ class Trainer():
         """是否使用梯度检查点技术节省显存"""
         self.dropout = config.dropout
         """dropout 概率"""
+
+        # RL 训练配置
+        self.rl_beta = config.rl_beta
+        """RL 训练的超参数 beta"""
+        self.gamma = config.gamma
+        """SimPO 训练的超参数 gamma"""
 
         # 评估配置
         self.ppl_eval = config.ppl_eval
@@ -360,9 +371,26 @@ class Trainer():
         self.model.to(self.device)   # 模型移动到指定设备
         self.logger.debug(f"模型已加载到设备: {self.device}")
 
+        if self.train_method in ["dpo", "ipo"]:
+            self._init_ref_model()
+
+    def _init_ref_model(self):
+            """初始化 DPO 所需的参考模型"""
+            self.logger.info("正在初始化参考模型 (Ref Model)...")
+            self.ref_model = copy.deepcopy(self.model)
+            self.ref_model.eval()
+            self.ref_model.to(self.device)
+            # 深拷贝当前模型
+
+            for param in self.ref_model.parameters():
+                param.requires_grad = False
+                # 冻结参数
+
+            self.logger.info("参考模型初始化完成")
+
     def _init_dataloader(self):
         """初始化数据加载器"""
-        assert self.train_method in ["text", "chat"], f"训练方法必须是 'text' 或 'chat', 但得到 {self.train_method}"
+        assert self.train_method in ["text", "chat", "dpo", "ipo", "simpo"], f"不支持的训练方法: {self.train_method}"
         # 断言训练方法信息无误
 
         if self.train_method == "text":
@@ -379,7 +407,22 @@ class Trainer():
                 block_size=self.block_size,
             )
 
+        elif self.train_method in ["dpo", "ipo", "simpo"]:
+            self.processor = RLDataProcessor(
+                json_file=self.train_data_path,
+                sp_model_path=self.tokenizer_path,
+                block_size=self.block_size,
+            )
+
         self.logger.debug(f"Train DataProcessor 加载完成")
+
+        if self.train_method == "text":
+            collate = text_collate_fn
+        elif self.train_method in ["dpo", "ipo", "simpo"]:
+            collate = rl_collate_fn
+        else:
+            collate = None
+        # 选择对应的 collate_fn
 
         if self.yield_load:
             self.logger.debug(f"使用 Yield 方式加载数据")
@@ -388,6 +431,8 @@ class Trainer():
                 self.train_dataset = GeneratorTextDataset(self.processor)   # type: ignore
             elif self.train_method == "chat":
                 self.train_dataset = Talk_GeneratorDialogueDataset(self.processor)   # type: ignore
+            elif self.train_method in ["dpo", "ipo", "simpo"]:
+                self.train_dataset = RLGeneratorDataset(self.processor)   # type: ignore
 
             self.logger.debug(f"Train Dataset 加载完成")
 
@@ -396,7 +441,7 @@ class Trainer():
                 batch_size=self.batch_size,
                 shuffle=False,
                 num_workers=0,   # yield 下必须为 0
-                collate_fn=text_collate_fn if self.train_method == "text" else None,
+                collate_fn=collate,
             )   # 初始化训练数据加载器
 
         else:
@@ -406,6 +451,8 @@ class Trainer():
                 self.train_dataset = TextDataset(self.processor)   # type: ignore
             elif self.train_method == "chat":
                 self.train_dataset = Talk_DialogueDataset(self.processor)   # type: ignore
+            elif self.train_method in ["dpo", "ipo", "simpo"]:
+                self.train_dataset = RLDataset(self.processor)   # type: ignore
 
             self.logger.debug(f"Train Dataset 加载完成")
 
@@ -415,7 +462,7 @@ class Trainer():
                 shuffle=False,
                 num_workers=self.num_workers,
                 pin_memory=self.pin_memory,
-                collate_fn=text_collate_fn if self.train_method == "text" else None,
+                collate_fn=collate,
             )   # 初始化训练数据加载器
 
         self.logger.debug(f"Train DataLoader 加载完成")
@@ -437,13 +484,23 @@ class Trainer():
                 )
                 valid_dataset = Talk_DialogueDataset(valid_processor)
 
+            elif self.train_method in ["dpo", "ipo", "simpo"]:
+                valid_processor = RLDataProcessor(
+                    json_file=self.valid_data_path,
+                    sp_model_path=self.tokenizer_path,
+                    block_size=self.block_size,
+                )
+                valid_dataset = RLDataset(valid_processor)
+
+            self.logger.debug(f"Valid Dataset 加载完成")
+
             self.valid_dataloader = DataLoader(
                 valid_dataset,
                 batch_size=self.batch_size,
                 shuffle=False,
                 num_workers=self.num_workers,
                 pin_memory=self.pin_memory,
-                collate_fn=text_collate_fn if self.train_method == "text" else None,
+                collate_fn=collate,
             )
 
             self.logger.debug(f"Valid DataLoader 加载完成")
@@ -468,13 +525,23 @@ class Trainer():
                 )
                 test_dataset = Talk_DialogueDataset(test_processor)
 
+            elif self.train_method in ["dpo", "ipo", "simpo"]:
+                test_processor = RLDataProcessor(
+                    json_file=self.test_data_path,
+                    sp_model_path=self.tokenizer_path,
+                    block_size=self.block_size,
+                )
+                test_dataset = RLDataset(test_processor)
+
+            self.logger.debug(f"Test Dataset 加载完成")
+
             self.test_dataloader = DataLoader(
                 test_dataset,
                 batch_size=self.batch_size,
                 shuffle=False,
                 num_workers=self.num_workers,
                 pin_memory=self.pin_memory,
-                collate_fn=text_collate_fn if self.train_method == "text" else None,
+                collate_fn=collate,
             )
 
             self.logger.debug(f"Test DataLoader 加载完成")
@@ -580,6 +647,8 @@ class Trainer():
             "batch_size": self.batch_size,
             "accumulation_steps": self.accumulation_steps,
             "block_size": self.block_size,
+            "rl_beta": self.rl_beta,
+            "gamma": self.gamma,
             "time": now_time,
             "all_epochs": self.all_epochs,
             "now_epoch": self.now_epoch,
@@ -643,6 +712,12 @@ class Trainer():
             
             self.block_size = resume_page["block_size"]
             # 从恢复页面中提取块大小
+
+            self.rl_beta = resume_page["rl_beta"]
+            # 从恢复页面中提取强化学习 beta
+            
+            self.gamma = resume_page["gamma"]
+            # 从恢复页面中提取 gamma
             
             self.resume_time = resume_page["time"]
             # 从恢复页面中提取保存时间
@@ -723,6 +798,110 @@ class Trainer():
 
         return loss
 
+    def _compute_dpo_loss(
+        self,
+        chosen_inputs: Tensor,
+        chosen_targets: Tensor,
+        chosen_masks: Tensor,
+        rejected_inputs: Tensor,
+        rejected_targets: Tensor,
+        rejected_masks: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """计算 DPO / IPO 损失"""
+        batch_size = chosen_inputs.size(0)
+
+        combined_inputs = torch.cat([chosen_inputs, rejected_inputs], dim=0)
+        # 拼接 chosen 和 rejected
+
+        combined_logits = self.model(combined_inputs)   # (2*batch, seq_len, vocab)
+        # 策略模型前向
+
+        with torch.no_grad():
+            combined_ref_logits = self.ref_model(combined_inputs)
+            # 参考模型前向 (不计算梯度)
+
+        log_probs = torch.log_softmax(combined_logits, dim=-1)
+        ref_log_probs = torch.log_softmax(combined_ref_logits, dim=-1)
+        # 计算 log softmax
+
+        chosen_log_probs = log_probs[:batch_size].gather(dim=-1, index=chosen_targets.unsqueeze(-1)).squeeze(-1)
+        rejected_log_probs = log_probs[batch_size:].gather(dim=-1, index=rejected_targets.unsqueeze(-1)).squeeze(-1)
+        chosen_ref_log_probs = ref_log_probs[:batch_size].gather(dim=-1, index=chosen_targets.unsqueeze(-1)).squeeze(-1)
+        rejected_ref_log_probs = ref_log_probs[batch_size:].gather(dim=-1, index=rejected_targets.unsqueeze(-1)).squeeze(-1)
+        # 收集目标 token 的对数概率
+
+        chosen_log_probs = chosen_log_probs * chosen_masks
+        rejected_log_probs = rejected_log_probs * rejected_masks
+        chosen_ref_log_probs = chosen_ref_log_probs * chosen_masks
+        rejected_ref_log_probs = rejected_ref_log_probs * rejected_masks
+        # 应用损失掩码
+
+        policy_chosen_logps = chosen_log_probs.sum(dim=-1)
+        policy_rejected_logps = rejected_log_probs.sum(dim=-1)
+        ref_chosen_logps = chosen_ref_log_probs.sum(dim=-1)
+        ref_rejected_logps = rejected_ref_log_probs.sum(dim=-1)
+        # 对序列求和, 得到每个样本的对数概率 [batch]
+
+        pi_logratios = policy_chosen_logps - policy_rejected_logps
+        ref_logratios = ref_chosen_logps - ref_rejected_logps
+        logits = pi_logratios - ref_logratios
+
+        if self.train_method == "dpo":
+            loss = -fc.logsigmoid(self.rl_beta * logits).mean()
+            # 计算比率和 DPO / IPO 损失
+
+        if self.train_method == "ipo":
+            ipo_target = 1.0 / (2.0 * self.rl_beta)
+            # IPO 目标值, 这里的 beta 是原论文的 tau
+
+            loss = (logits - ipo_target) ** 2
+            loss = loss.mean()   # 对所有样本求平均
+
+        return loss, pi_logratios, ref_logratios
+
+    def _compute_simpo_loss(
+        self,
+        chosen_inputs: Tensor,
+        chosen_targets: Tensor,
+        chosen_masks: Tensor,
+        rejected_inputs: Tensor,
+        rejected_targets: Tensor,
+        rejected_masks: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """计算 SimPO 损失"""
+        batch_size = chosen_inputs.size(0)
+
+        combined_inputs = torch.cat([chosen_inputs, rejected_inputs], dim=0)
+        # 拼接 chosen 和 rejected
+
+        combined_logits = self.model(combined_inputs)   # (2*batch, seq_len, vocab)
+        # 模型前向
+
+        log_probs = torch.log_softmax(combined_logits, dim=-1)
+        # 计算 log softmax
+
+        chosen_log_probs = log_probs[:batch_size].gather(dim=-1, index=chosen_targets.unsqueeze(-1)).squeeze(-1)
+        rejected_log_probs = log_probs[batch_size:].gather(dim=-1, index=rejected_targets.unsqueeze(-1)).squeeze(-1)
+        # 收集目标 token 的对数概率
+
+        chosen_log_probs = chosen_log_probs * chosen_masks
+        rejected_log_probs = rejected_log_probs * rejected_masks
+        # 应用损失掩码
+
+        chosen_len = chosen_masks.sum(dim=-1).clamp(min=1e-8)
+        rejected_len = rejected_masks.sum(dim=-1).clamp(min=1e-8)
+        # 计算每个样本的有效长度
+
+        policy_chosen_logps = chosen_log_probs.sum(dim=-1) / chosen_len
+        policy_rejected_logps = rejected_log_probs.sum(dim=-1) / rejected_len
+        # 对序列求和, 得到每个样本的对数概率
+
+        logits = policy_chosen_logps - policy_rejected_logps
+        loss = -fc.logsigmoid(self.rl_beta * logits - self.gamma).mean()
+        # 计算 SimPO 损失
+
+        return loss, policy_chosen_logps, policy_rejected_logps
+
     def _mixed_dtype(self) -> torch.dtype:
         """根据混合精度模式返回对应 dtype
 
@@ -752,28 +931,33 @@ class Trainer():
             self.logger.debug(f"成功加载基础模型模型: {model_path}")
             # 加载模型状态
 
-            try:
-                self.optimizer.load_state_dict(torch.load(optimizer_path, map_location=self.device))
-                self.logger.debug(f"成功加载基础模型优化器: {optimizer_path}")
-            except Exception as e:
-                self.logger.warning(f"加载基础模型优化器失败, 可能影响训练")
-            # 加载优化器状态
-
-            if self.scheduler_suffix and self.rate_scheduler is not None:
+            if self.load_optimizer:
                 try:
-                    scheduler_path = os.path.join(self.train_model_dir, self.train_model_name+self.scheduler_suffix)
-                    self.rate_scheduler.load_state_dict(torch.load(scheduler_path, map_location=self.device))
-                    self.logger.debug(f"成功加载基础模型调度器: {scheduler_path}")
+                    self.optimizer.load_state_dict(torch.load(optimizer_path, map_location=self.device))
+                    self.logger.debug(f"成功加载基础模型优化器: {optimizer_path}")
                 except Exception as e:
-                    self.logger.warning(f"加载基础模型调度器失败, 可能影响训练")
-                # 加载调度器状态
+                    self.logger.warning(f"加载基础模型优化器失败, 可能影响训练")
+                # 加载优化器状态
 
-            self.logger.info(f"成功从基础模型加载模型和优化器状态: {model_path}")
-            # logger
+                if self.scheduler_suffix and self.rate_scheduler is not None:
+                    try:
+                        scheduler_path = os.path.join(self.train_model_dir, self.train_model_name+self.scheduler_suffix)
+                        self.rate_scheduler.load_state_dict(torch.load(scheduler_path, map_location=self.device))
+                        self.logger.debug(f"成功加载基础模型调度器: {scheduler_path}")
+                    except Exception as e:
+                        self.logger.warning(f"加载基础模型调度器失败, 可能影响训练")
+                    # 加载调度器状态
+
+                self.logger.info(f"成功从基础模型加载模型和优化器状态: {model_path}")
+                # logger
+
+            else:
+                self.logger.info(f"成功从基础模型加载模型状态: {model_path}")
+                # logger      
         
         except Exception as e:
-            self.logger.error(f"从检查点加载模型和优化器状态失败: {e}")
-            raise RuntimeError(f"从检查点加载模型和优化器状态失败: {e}")
+            self.logger.error(f"从检查点加载模型状态失败: {e}")
+            raise RuntimeError(f"从检查点加载模型状态失败: {e}")
 
     def _load_from_resume(self):
         """从恢复页加载模型和优化器状态"""
@@ -790,6 +974,10 @@ class Trainer():
                 self.rate_scheduler.load_state_dict(torch.load(self.resume_scheduler_path, map_location=self.device))
                 self.logger.debug(f"成功加载优化调度器: {self.resume_scheduler_path}")
             # 加载调度器状态
+
+            if self.train_method in ["dpo", "ipo"]:
+                self._init_ref_model()
+                # 加载参考模型状态
 
             self.logger.info(f"成功从恢复页加载模型和优化器状态: {self.ckpt_path}")
             # logger
@@ -952,11 +1140,14 @@ class Trainer():
 
             try:
                 self.train_signal = True   # 训练信号
-                self.train_one_epoch()
-                # 训练一个轮次
 
-                test_loss = self.test()
-                # 测试模型
+                if self.train_method in ["text", "chat"]:
+                    self.train_one_epoch()    # 训练一个轮次
+                    test_loss = self.test()   # 测试模型
+
+                else:   # 强化学习训练
+                    self.train_one_rl_epoch()    # 训练一个轮次
+                    test_loss = self.rl_test()   # 测试模型
 
                 self.now_epoch += 1
                 # 轮次增加
@@ -1096,6 +1287,113 @@ class Trainer():
         self.optimizer.zero_grad()
         # 清空梯度
 
+    def train_one_rl_epoch(self):
+        total_loss = 0.0
+        info_loss = 0.0
+        total_pi_logratios = 0.0
+        total_ref_logratios = 0.0
+        for step, batch in enumerate(self.train_dataloader):
+            if step < self.skip_steps and self.need_skip:
+                self.train_progress.update(self.main_skip_progress, advance=1)
+                continue
+            else:
+                self.need_skip = False
+
+            # ==================== 数据解析 ====================
+
+            (chosen_inputs, chosen_targets, chosen_masks,
+                rejected_inputs, rejected_targets, rejected_masks) = batch
+            # 移到设备
+
+            chosen_inputs: Tensor = chosen_inputs.to(self.device).long()
+            chosen_targets: Tensor = chosen_targets.to(self.device).long()
+            chosen_masks: Tensor = chosen_masks.to(self.device).float()
+            rejected_inputs: Tensor = rejected_inputs.to(self.device).long()
+            rejected_targets: Tensor = rejected_targets.to(self.device).long()
+            rejected_masks: Tensor = rejected_masks.to(self.device).float()
+
+            # ==================== Forward ====================
+
+            with autocast(device_type=str(self.device), dtype=self._mixed_dtype()):
+                if self.train_method in ["dpo", "ipo"]:
+                    loss, pi_logratios, ref_logratios = self._compute_dpo_loss(
+                        chosen_inputs, chosen_targets, chosen_masks,
+                        rejected_inputs, rejected_targets, rejected_masks
+                    )
+                else:
+                    loss, pi_logratios, ref_logratios = self._compute_simpo_loss(
+                        chosen_inputs, chosen_targets, chosen_masks,
+                        rejected_inputs, rejected_targets, rejected_masks
+                    )
+
+                loss = loss / self.accumulation_steps
+
+            # ==================== Backward ====================
+
+            if self.scaler is not None:
+                self.scaler.scale(loss).backward()
+            else:
+                loss.backward()
+
+            total_loss += loss.item()
+            total_pi_logratios += pi_logratios.mean().item() / self.accumulation_steps
+            total_ref_logratios += ref_logratios.mean().item() / self.accumulation_steps
+            info_loss += loss.item()
+            self.local_steps = step
+
+            self.train_progress.update(self.tsp_progress, advance=1/self.info_update_interval)
+
+            # ==================== 优化更新 ====================
+
+            if (step + 1) % self.accumulation_steps == 0:
+                if self.grad_clip is not None:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.grad_clip)
+                if self.scaler is not None:
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    self.optimizer.step()
+                self.optimizer.zero_grad(set_to_none=True)
+                self.train_steps += 1
+
+                if self.writer is not None and self.writer_name is not None:
+                    self.writer.add_scalar(self.writer_name+'_train_loss', total_loss, self.train_steps)
+                    self.writer.add_scalar(self.writer_name+'_train_pi_logratios', total_pi_logratios, self.train_steps)
+                    self.writer.add_scalar(self.writer_name+'_train_ref_logratios', total_ref_logratios, self.train_steps)
+                    self.writer.add_scalar(self.writer_name+'_train_reward', total_pi_logratios - total_ref_logratios, self.train_steps)
+
+                if self.rate_scheduler is not None:
+                    self.rate_scheduler.step()
+
+                total_loss = 0.0
+                total_pi_logratios = 0.0
+                total_ref_logratios = 0.0
+
+            # ==================== 信息更新 ====================
+
+            if (step + 1) % self.info_update_interval == 0:
+                self.info_steps += 1
+                tsp_show_txt = f'train_info_steps: {self.info_steps}/{self.all_tsp}'
+                self.train_progress.update(self.tsp_progress, show_info=tsp_show_txt)
+
+                avg_loss = (info_loss / self.info_update_interval) * self.accumulation_steps
+                info_loss = 0.0
+
+                if self.writer is not None and self.writer_name is not None:
+                    self.writer.add_scalar(self.writer_name+'_avg_train_loss', avg_loss, self.info_steps)
+                    if self.ppl_eval:
+                        ppl = math.exp(avg_loss)
+                        self.writer.add_scalar(self.writer_name+'_avg_train_ppl', ppl, self.info_steps)
+
+                eval_loss = self.rl_evaluate()
+                self._save_checkpoint(f"time/step{self.info_steps}", f"epoch_{self.now_epoch}_step_{self.info_steps}")
+                self.delete_checkpoint("time")
+                if eval_loss is not None and self.save_best_checkpoint:
+                    self.check_best_checkpoint(None, eval_loss, self.info_steps)
+
+        self.optimizer.zero_grad()
+        # 清空梯度
+
     def evaluate(self):
         if self.valid_dataloader is not None:
             self.model.eval()   # 设置为评估模式
@@ -1140,6 +1438,66 @@ class Trainer():
 
         else:   # 无验证集时跳过
             return None
+
+    def rl_evaluate(self):
+        if self.valid_dataloader is None:
+            return None
+
+        self.model.eval()
+        total_loss = 0.0
+        total_correct = 0      # 统计 chosen 胜出的样本数
+        total_samples = 0
+
+        with autocast(device_type=str(self.device), dtype=self._mixed_dtype()):
+            with torch.no_grad():
+                for batch in self.valid_dataloader:
+                    (chosen_inputs, chosen_targets, chosen_masks,
+                    rejected_inputs, rejected_targets, rejected_masks) = batch
+                    # 解析 batch
+
+                    chosen_inputs: Tensor = chosen_inputs.to(self.device).long()
+                    chosen_targets: Tensor = chosen_targets.to(self.device).long()
+                    chosen_masks: Tensor = chosen_masks.to(self.device).float()
+                    rejected_inputs: Tensor = rejected_inputs.to(self.device).long()
+                    rejected_targets: Tensor = rejected_targets.to(self.device).long()
+                    rejected_masks: Tensor = rejected_masks.to(self.device).float()
+                    # 移到设备
+
+                    if self.train_method in ["dpo", "ipo"]:
+                        loss, pi_logratios, ref_logratios = self._compute_dpo_loss(
+                            chosen_inputs, chosen_targets, chosen_masks,
+                            rejected_inputs, rejected_targets, rejected_masks
+                        )
+                    else:  # simpo
+                        loss, pi_logratios, ref_logratios = self._compute_simpo_loss(
+                            chosen_inputs, chosen_targets, chosen_masks,
+                            rejected_inputs, rejected_targets, rejected_masks
+                        )
+                    # 根据训练方法选择对应的损失计算函数
+
+                    batch_size = chosen_inputs.size(0)
+                    total_loss += loss.item() * batch_size
+                    total_samples += batch_size
+                    correct = (pi_logratios > 0).sum().item()
+                    total_correct += correct
+                    # 计算偏好准确率: pi_logratios > 0 表示模型认为 chosen 优于 rejected
+                    # pi_logratios = policy_chosen_logps - policy_rejected_logps
+
+        avg_loss = total_loss / total_samples
+        accuracy = total_correct / total_samples if total_samples > 0 else 0.0
+
+        self.logger.info(f"验证步数: {self.info_steps}")
+        self.logger.info(f"验证损失: {avg_loss:.4f}")
+        self.logger.info(f"偏好准确率: {accuracy:.4f}")
+        # 日志记录
+
+        if self.writer is not None and self.writer_name is not None:
+            self.writer.add_scalar(self.writer_name + '_valid_loss', avg_loss, self.train_steps)
+            self.writer.add_scalar(self.writer_name + '_valid_accuracy', accuracy, self.train_steps)
+            # TensorBoard 记录
+
+        self.model.train()
+        return avg_loss
 
     def test(self):
         """运用评估集测试模型"""
@@ -1186,6 +1544,66 @@ class Trainer():
 
         else:   # 无测试集时跳过
             return None
+        
+    def rl_test(self):
+        if self.test_dataloader is None:
+            return None
+
+        self.model.eval()
+        total_loss = 0.0
+        total_correct = 0      # 统计 chosen 胜出的样本数
+        total_samples = 0
+
+        with autocast(device_type=str(self.device), dtype=self._mixed_dtype()):
+            with torch.no_grad():
+                for batch in self.test_dataloader:
+                    (chosen_inputs, chosen_targets, chosen_masks,
+                    rejected_inputs, rejected_targets, rejected_masks) = batch
+                    # 解析 batch
+
+                    chosen_inputs: Tensor = chosen_inputs.to(self.device).long()
+                    chosen_targets: Tensor = chosen_targets.to(self.device).long()
+                    chosen_masks: Tensor = chosen_masks.to(self.device).float()
+                    rejected_inputs: Tensor = rejected_inputs.to(self.device).long()
+                    rejected_targets: Tensor = rejected_targets.to(self.device).long()
+                    rejected_masks: Tensor = rejected_masks.to(self.device).float()
+                    # 移到设备
+
+                    if self.train_method in ["dpo", "ipo"]:
+                        loss, pi_logratios, ref_logratios = self._compute_dpo_loss(
+                            chosen_inputs, chosen_targets, chosen_masks,
+                            rejected_inputs, rejected_targets, rejected_masks
+                        )
+                    else:  # simpo
+                        loss, pi_logratios, ref_logratios = self._compute_simpo_loss(
+                            chosen_inputs, chosen_targets, chosen_masks,
+                            rejected_inputs, rejected_targets, rejected_masks
+                        )
+                    # 根据训练方法选择对应的损失计算函数
+
+                    batch_size = chosen_inputs.size(0)
+                    total_loss += loss.item() * batch_size
+                    total_samples += batch_size
+                    correct = (pi_logratios > 0).sum().item()
+                    total_correct += correct
+                    # 计算偏好准确率: pi_logratios > 0 表示模型认为 chosen 优于 rejected
+                    # pi_logratios = policy_chosen_logps - policy_rejected_logps
+
+        avg_loss = total_loss / total_samples
+        accuracy = total_correct / total_samples if total_samples > 0 else 0.0
+
+        self.logger.info(f"验证步数: {self.info_steps}")
+        self.logger.info(f"验证损失: {avg_loss:.4f}")
+        self.logger.info(f"偏好准确率: {accuracy:.4f}")
+        # 日志记录
+
+        if self.writer is not None and self.writer_name is not None:
+            self.writer.add_scalar(self.writer_name + '_test_loss', avg_loss, self.train_steps)
+            self.writer.add_scalar(self.writer_name + '_test_accuracy', accuracy, self.train_steps)
+            # TensorBoard 记录
+
+        self.model.train()
+        return avg_loss
 
     def print_info(self):
         """打印训练配置信息"""

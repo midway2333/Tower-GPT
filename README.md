@@ -161,16 +161,26 @@ LOGO 图标
 <details close> 
 <summary>  <b>12.27更新</b> </summary>
 - 修复 ChatDataloader 流式加载错误<br>
-- 优化 logger 逻辑
-- 重命名 logger 与 config<br>
+- 优化 logger 逻辑，重命名 logger<br>
 - 优化检查点保存逻辑
+</details>
+
+</details>
+
+<details close> 
+<summary>  <b>2026年度维护</b> </summary>
+
+<details close> 
+<summary>  <b>2.22更新</b> </summary>
+- 为训练添加了 DPO、IPO 与 SimPO 支持<br>
+- 修复了热启动训练时加载优化器的逻辑问题
 </details>
 
 </details>
 
 <details open> 
 <summary>  <b>2025.12.21重大更新</b> </summary>
-- 完全重构训练，推理，dataset/dataloader文件<br>
+- 完全重构训练、推理与dataset/dataloader文件<br>
 - 新的 tokenizer<br>
 - 新的工具文件结构<br>
 - 若干遗留问题修复
@@ -179,7 +189,7 @@ LOGO 图标
 
 ## TODO
 
-- DPO 训练代码
+- DPO 训练代码 ✅
 - train grad-checkpoint 支持
 - train BLUE 评估支持
 
@@ -187,5 +197,3 @@ LOGO 图标
 
 本项目虽然已经经过了一段时间的发展，但规范性与实用性依然无法看齐业界内的其它项目；如果您发现了任何新的问题或有关本项目的优化，欢迎在本项目的[issues](https://github.com/midway2333/tower_gpt/issues)中提出<br>
 [第二代Tower](https://github.com/midway2333/Tower2)已经开源！但本项目依然维持更新
-
-
