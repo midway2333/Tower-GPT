@@ -44,7 +44,7 @@ from dataset import text_collate_fn
 from dataset import rl_collate_fn
 
 # 模型类
-from model import Tower_GPT
+from re_model import Tower_GPT
 
 # 配置文件
 from train_config import TrainerConfig
@@ -1133,6 +1133,14 @@ class Trainer():
             )   # 设置跳过批次更新信息
 
             self.train_progress.update(self.main_skip_progress, show_info=skip_show_txt, advance=0)
+            # 初始跳过批次进度条显示更新
+
+            tsp_show_txt = 'train_info_steps: {}/{}'.format(
+                    self.local_steps // self.info_update_interval, self.all_tsp
+            )   # 设置tsp更新信息
+
+            self.train_progress.update(self.tsp_progress, show_info=tsp_show_txt, advance=0)
+            # 更新tsp进度条显示
 
         for epoch in range(self.all_epochs):
             if epoch < self.now_epoch:
@@ -1194,8 +1202,13 @@ class Trainer():
         info_loss = 0.0
         for step, (x, y, loss_mask) in enumerate(self.train_dataloader):   # 生成步进索引
             if step < self.skip_steps and self.need_skip:
-                self.train_progress.update(self.main_skip_progress, advance=1)
+                self.train_progress.update(
+                    self.main_skip_progress,
+                    advance=1,
+                    show_info=f'skipped_steps: {step+1}/{self.skip_steps}'
+                )
                 continue
+
             else:
                 self.need_skip = False
 
@@ -1610,7 +1623,7 @@ class Trainer():
         print("=" * 60)
         print("训练配置信息")
         print("=" * 60)
-        
+
         # 模型配置
         print("📊 模型配置:")
         print(f"  ├── 解码器层数: {self.decoder_num}")
@@ -1619,7 +1632,7 @@ class Trainer():
         print(f"  ├── KV 维度: {self.dk}")
         print(f"  ├── 前馈网络维度: {self.dff}")
         print(f"  └── 词表大小: {self.vocab_size}")
-        
+
         # 训练器配置
         print("🚀 训练器配置:")
         print(f"  ├── 训练方式: {self.train_method}")
@@ -1627,12 +1640,12 @@ class Trainer():
         print(f"  ├── 微调模式: {self.finetune}")
         print(f"  ├── 编译优化: {self.compile}")
         print(f"  └── 加载优化器: {self.load_optimizer}")
-        
+
         # 设备配置
         print("💻 设备配置:")
         print(f"  ├── 训练设备: {self.device}")
         print(f"  └── 混合精度: {self.mixed_precision}")
-        
+
         # 路径配置
         print("📁 路径配置:")
         print(f"  ├── 预训练模型目录: {self.train_model_dir}")
@@ -1641,12 +1654,12 @@ class Trainer():
         print(f"  ├── 输出模型名: {self.output_model_name}")
         print(f"  ├── 模型文件后缀: {self.model_suffix}")
         print(f"  └── 优化器文件后缀: {self.optimizer_suffix}")
-        
+
         # 检查点配置
         print("💾 检查点配置:")
         print(f"  ├── 最大检查点数量: {self.max_checkpoints}")
         print(f"  └── 保存最佳检查点: {self.save_best_checkpoint}")
-        
+
         # 数据集配置
         print("📚 数据集配置:")
         print(f"  ├── 训练数据路径: {self.train_data_path}")
@@ -1656,7 +1669,7 @@ class Trainer():
         print(f"  ├── 数据加载线程数: {self.num_workers}")
         print(f"  ├── 固定内存: {self.pin_memory}")
         print(f"  └── 流式加载: {self.yield_load}")
-        
+
         # 训练参数
         print("⚙️ 训练参数:")
         print(f"  ├── 总训练轮数: {self.all_epochs}")
@@ -1664,7 +1677,7 @@ class Trainer():
         print(f"  ├── 序列长度: {self.block_size}")
         print(f"  ├── 梯度累计步数: {self.accumulation_steps}")
         print(f"  └── 信息更新间隔: {self.info_update_interval}")
-        
+
         # 优化器配置
         print("📈 优化器配置:")
         print(f"  ├── 优化器: {self.optimizer_name}")
@@ -1677,24 +1690,30 @@ class Trainer():
         print(f"  ├── 最大学习率倍率: {self.max_lr_rate}")
         print(f"  ├── 初始学习率倍率: {self.div_factor}")
         print(f"  └── 退火策略: {self.anneal_strategy}")
-        
+
+        # 强化学习配置
+        if self.train_method in ['dpo', 'ipo', 'simpo']:
+            print("🚩 RL 配置:")
+            print(f"  ├── RL 奖励系数: {self.rl_beta}")
+            print(f"  └── SimPO Gamma 因子: {self.gamma}")
+
         # 模型技术参数配置
         print("🎯 模型技术参数配置:")
         print(f"  ├── 梯度裁剪: {self.grad_clip}")
         print(f"  ├── 梯度检查点: {self.grad_checkpoint}")
         print(f"  └── Dropout: {self.dropout}")
-        
+
         # 评估配置
         print("📊 评估配置:")
         print(f"  ├── 困惑度评估: {self.ppl_eval}")
         print(f"  └── BLEU-4 评估: {self.bleu_eval}")
-        
+
         # 可视化配置
         print("📈 可视化配置:")
         print(f"  ├── TensorBoard: {self.tensorboard}")
         print(f"  ├── TensorBoard 目录: {self.tensorboard_dir}")
         print(f"  └── TensorBoard 日志名: {self.writer_name}")
-        
+
         # 日志配置
         print("📝 日志配置:")
         print(f"  ├── 日志名称: {self.logger_name}")
@@ -1703,7 +1722,7 @@ class Trainer():
         print(f"  ├── 控制台输出: {self.std_out}")
         print(f"  ├── 保存到文件: {self.save_info}")
         print(f"  └── 日志文件名: {self.file_name}")
-        
+
         print("=" * 60)
 
     def update_step(self):

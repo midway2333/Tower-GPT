@@ -176,6 +176,14 @@ LOGO 图标
 - 修复了热启动训练时加载优化器的逻辑问题
 </details>
 
+<details close> 
+<summary>  <b>3.15更新</b> </summary>
+- 新的分词器<br>
+- 修复训练恢复时的进度条错误<br>
+- 新的改进架构<br>
+- 修改对话模板逻辑
+</details>
+
 </details>
 
 <details open> 

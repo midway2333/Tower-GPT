@@ -24,11 +24,13 @@ class Generation:
 
         self.bos_id = self.tokenizer.bos_id()
         self.eos_id = self.tokenizer.eos_id()
+        self.pad_id = self.tokenizer.PieceToId('<pad>')
         self.user_id = self.tokenizer.PieceToId('<user>')
         self.bot_id = self.tokenizer.PieceToId('<bot>')
+        self.newline_id = self.tokenizer.PieceToId('\n')
         # 获取特殊token ID
 
-        self.STOP_TOKENS = [self.eos_id, self.user_id, self.bot_id]
+        self.STOP_TOKENS = [self.eos_id, self.user_id, self.bot_id, self.bos_id, self.pad_id]
         # 停止标记列表
 
     def _apply_repetition_penalty(
@@ -204,10 +206,15 @@ class Generation:
                 break
 
             history.extend(
-                  [self.user_id]
+                [self.bos_id]
+                + [self.user_id]
+                + [self.newline_id]
                 + self.tokenizer.EncodeAsIds(input_text)
                 + [self.eos_id]
+                + [self.newline_id]
+                + [self.bos_id]
                 + [self.bot_id]
+                + [self.newline_id]
             )   # 添加输入文本
 
             history = self.check_and_cut_length(history, max_length)
@@ -230,23 +237,25 @@ class Generation:
 
                 if output_token_id in self.STOP_TOKENS:
                     history.append(self.eos_id)
+                    history.append(self.newline_id)
                     generate_length = 0
                     print()   # 换行
                     break
 
-                else:
-                    history.append(output_token_id)
-                    generate_length += 1
-                    # 更新生成长度
+                history.append(output_token_id)
+                generate_length += 1
+                # 更新生成长度
 
-                    history = self.check_and_cut_length(history, max_length)
-                    # 长度检查
+                history = self.check_and_cut_length(history, max_length)
+                # 长度检查
 
-                    word = self.tokenizer.DecodeIds([output_token_id])   # 预测的 token 解码为字词
-                    print(word, end='')    # 打印字词
+                word = self.tokenizer.DecodeIds([output_token_id])   # 预测的 token 解码为字词
+                print(word, end='')    # 打印字词
 
-                    if generate_length % 20 == 0:   # 打印换行符
-                        print()                     # 方便阅读
+                if generate_length % 20 == 0:   # 打印换行符
+                    print()                     # 方便阅读
+
+            print()
 
     def generate_text(
         self,
@@ -256,7 +265,8 @@ class Generation:
         temperature: float = 1.0,
         top_k: int = 0,
         top_p: float = 0.0,
-        repetition_penalty: float = 1.0
+        repetition_penalty: float = 1.0,
+        chat_mode: bool = False,
     ) -> str:
         """
         文本续写生成
@@ -274,7 +284,10 @@ class Generation:
         - 生成的文本
         """
         input_ids = self.tokenizer.EncodeAsIds(prompt)
-        input_ids = [self.bos_id] + input_ids
+        if chat_mode:
+            input_ids = [self.bos_id] + [self.user_id] + input_ids + [self.eos_id] + [self.bot_id]
+        else:
+            input_ids = [self.bos_id] + input_ids
         # 将提示文本转换为token
 
         input_ids = self.check_and_cut_length(input_ids, max_length)
@@ -319,48 +332,56 @@ class Generation:
         # 加载模型权重并设置为评估模式
 
 if __name__ == '__main__':
-    from model import Tower_GPT
+    from re_model import Tower_GPT
     
     # 加载模型
     model = Tower_GPT(
-        decoder_num=4,
-        head_num=4,
-        d=1024,
-        dk=128,
-        dff=4096,
-        vocab_size=32768,
-        padding_idx=3,
+        decoder_num=8,
+        head_num=8,
+        d=512,
+        dk=64,
+        dff=2048,
+        vocab_size=7368,
         device='cuda' if torch.cuda.is_available() else 'cpu',
         init=False
     )
+
+    model.load_state_dict(torch.load('37m\\tower_37m_distill_sft_final.bin', map_location='cpu'))
+
+
+    def count_parameters(model):
+        return sum(p.numel() for p in model.parameters())
+    print(count_parameters(model))
     
     # 创建生成器
     generator = Generation(
         model=model,
-        tokenizer_path='tokenizer\\tower_dict_v2.4_32768.model',  # 替换为你的分词器路径
+        tokenizer_path='remaster\\tokenizer\\tower_dict_v3.0_7368.model',  # 替换为你的分词器路径
         device='cuda' if torch.cuda.is_available() else 'cpu'
     )
     
     # 示例1: 文本续写
-    print("=== 文本续写示例 ===")
-    result = generator.generate_text(
-        prompt="人工智能是",
-        max_generate_length=50,
-        temperature=0.8,
-        top_k=30,
-        top_p=0.9
-    )
-    print(f"输入: 人工智能是")
-    print(f"续写: {result}")
-    print()
-    
+    # print("=== 文本续写示例 ===")
+    # result = generator.generate_text(
+    #     prompt="输入: 人工智能是",
+    #     max_generate_length=50,
+    #     temperature=1.0,
+    #     top_k=20,
+    #     top_p=0.9,
+    #     repetition_penalty=1.8,
+    #     chat_mode=True,
+    # )
+    # print(f"输入: 人工智能是")
+    # print(f"续写: {result}")
+    # print()
+
     # 示例2: 启动聊天模式
     print("=== 启动聊天模式 ===")
     generator.chat(
-        max_length=256,
-        max_generate_length=128,
-        temperature=0.7,
-        top_k=50,
-        top_p=0.9,
-        repetition_penalty=1.1
+        max_length=512,
+        max_generate_length=512,
+        temperature=0.85,
+        top_k=20,
+        top_p=0.85,
+        repetition_penalty=1.3
     )
