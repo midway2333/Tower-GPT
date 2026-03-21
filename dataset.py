@@ -28,6 +28,23 @@ class TextDataProcessor:
         self.buffer_size: int = buffer_size   # 缓冲区大小
         self.field: str = field   # 对话数据中包含输入文本的字段名
 
+    def _encode_with_eos_sep(self, text: str, eos: str = '<|im_end|>') -> list[int]:
+        """
+        将文本按 eos 分割, 每个部分编码后在末尾添加 eos_id
+        """
+        # 以 eos 为分隔符分割文本
+        parts = text.split(eos)
+        token_ids = []
+        for part in parts:
+            part = part.strip()
+            if part:   # 编码当前片段
+                encoded = self.sp.encode(part, out_type=int)  # type: ignore
+                token_ids.extend(encoded)
+
+            if part:   # 只在非空片段后加 eos
+                token_ids.append(self.eos_id)
+        return token_ids
+
     def load_and_encode_data(self):
         """
         加载并编码对话数据
@@ -50,8 +67,9 @@ class TextDataProcessor:
                 dialogue = json.loads(line)
                 input_text = dialogue[self.field]   # 假设每行都有 'text' 字段
 
-                input_ids = self.sp.encode(input_text, out_type=int)   # type: ignore
-                input_ids = [self.bos_id] + input_ids + [self.eos_id]
+                token_ids = self._encode_with_eos_sep(input_text)
+                input_ids = token_ids + [self.eos_id]
+                # token_ids = [self.bos_id] + token_ids   # 现在不添加 bos_id
 
                 if len(input_ids) > self.block_size:
                     i = random.randint(0, len(input_ids) - self.block_size - 1)
@@ -90,8 +108,8 @@ class TextDataProcessor:
                 dialogue = json.loads(line.strip())
 
                 input = dialogue[self.field]   # 获取用户输入文本
-                input_ids = self.sp.encode(input, out_type=int)   # type: ignore
-                input_ids = [self.bos_id] + input_ids + [self.eos_id]
+                input_ids = self._encode_with_eos_sep(input)
+                # input_ids = [self.bos_id] + input_ids   # 可选添加 bos
 
                 if len(input_ids) > self.block_size:   # 随机选择一个起始索引
 
@@ -201,15 +219,18 @@ class MultiTurn_DialogueDataProcessor:
         self.bot_id = [self.sp.PieceToId('<bot>')]
         # 获得user_id与bot_id
 
+        self.newline_id = [self.sp.PieceToId('\n')]
+        # 获取换行符的 id, 用于分隔对话
+
     def _process_single_dialogue(self, record: dict) -> Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         """处理单个多轮对话数据"""
-        messages = record.get("messages")
+        messages = record.get("messages") or record.get("dialogue") or record.get("conversations")   # 尝试不同的字段名
 
         if not isinstance(messages, list) or len(messages) == 0:
             return None   # 输入验证检查
 
-        token_ids = [self.bos_id]   # 整个序列开头只加一次 <s>
-        loss_mask = [0]             # 损失掩码, 0表示忽略loss, 1表示计算loss
+        token_ids = []
+        loss_mask = []   # 损失掩码, 0表示忽略loss, 1表示计算loss
 
         for msg in messages:   # 检查消息结构
             if not (isinstance(msg, dict) and "role" in msg and "content" in msg):
@@ -223,15 +244,17 @@ class MultiTurn_DialogueDataProcessor:
                 continue
 
             if role == "user":
-                token_ids += self.user_id + self.sp.encode(content, out_type=int) + [self.eos_id]   # type: ignore
-                loss_mask += [0] * (len(self.user_id) + len(self.sp.encode(content, out_type=int)) + 1)    # type: ignore
+                token_ids += [self.bos_id] + self.user_id  + self.newline_id + self.sp.encode(content, out_type=int) + [self.eos_id] + self.newline_id   # type: ignore
+                loss_mask += [0] * (5 + len(self.sp.encode(content, out_type=int)))    # type: ignore
 
             elif role == "assistant":
-                token_ids += self.bot_id + self.sp.encode(content, out_type=int) + [self.eos_id]   # type: ignore
-                loss_mask += [1] * (len(self.bot_id) + len(self.sp.encode(content, out_type=int)) + 1)   # type: ignore
-                # 助手回复部分计算loss
+                token_ids += [self.bos_id] + self.bot_id + self.newline_id + self.sp.encode(content, out_type=int) + [self.eos_id] + self.newline_id   # type: ignore
+                loss_mask += [0] * 3   # <s> + <bot> + \n 不计算 loss
+                loss_mask += [1] * (1 + len(self.sp.encode(content, out_type=int)))   # type: ignore
+                loss_mask += [0]   # \n 不计算 loss
+                # 助手回复部分计算 loss
 
-        if len(token_ids) < 2:  # 至少要有 <s> + 一个 token
+        if len(token_ids) < 2:   # 至少要有 <s> + 一个 token
             return None
 
         if len(token_ids) > self.block_size:
@@ -243,7 +266,7 @@ class MultiTurn_DialogueDataProcessor:
         else:   # 短序列: 填充
             input_ids = token_ids[:-1] + [self.padding_id] * (self.block_size - len(token_ids) + 1)
             target_ids = token_ids[1:] + [self.padding_id] * (self.block_size - len(token_ids) + 1)
-            loss_mask = loss_mask[1:] + [0] * (self.block_size - len(token_ids) + 1)  # 填充部分不计算loss
+            loss_mask = loss_mask[1:] + [0] * (self.block_size - len(token_ids) + 1)   # 填充部分不计算loss
 
         return (
             torch.tensor(input_ids, dtype=torch.int32), 
@@ -362,9 +385,12 @@ class RLDataProcessor:
         self.bot_id = [self.sp.PieceToId('<bot>')]
         # 获取 user 和 bot 的 id
 
+        self.newline_id = [self.sp.PieceToId('\n')]
+        # 获取换行符的 id, 用于分隔对话
+
     def _process_conversation(self, messages):
         """
-        处理单个对话（chosen 或 rejected），返回 (input_ids, target_ids, loss_mask)
+        处理单个对话 (chosen 或 rejected), 返回 (input_ids, target_ids, loss_mask)
 
         参数:
             messages (list): 消息列表，每个元素为 {"role": "user"/"assistant", "content": "..."}
@@ -375,8 +401,8 @@ class RLDataProcessor:
         if not isinstance(messages, list) or len(messages) == 0:
             return None
 
-        token_ids = [self.bos_id]    # 整个序列开头加 <s>
-        loss_mask = [0]             # 损失掩码, 0 不计算 loss
+        token_ids = []
+        loss_mask = []   # 损失掩码, 0表示不计算loss, 1表示计算loss
 
         for msg in messages:
             if not (isinstance(msg, dict) and "role" in msg and "content" in msg):
@@ -389,13 +415,15 @@ class RLDataProcessor:
 
             if role == "user":
                 encoded = self.sp.encode(content, out_type=int)   # type: ignore
-                token_ids += self.user_id + encoded + [self.eos_id]
-                loss_mask += [0] * (len(self.user_id) + len(encoded) + 1)
+                token_ids += [self.bos_id] + self.user_id + self.newline_id + encoded + [self.eos_id] + self.newline_id
+                loss_mask += [0] * (5 + len(encoded))
 
             elif role == "assistant":
                 encoded = self.sp.encode(content, out_type=int)   # type: ignore
-                token_ids += self.bot_id + encoded + [self.eos_id]
-                loss_mask += [1] * (len(self.bot_id) + len(encoded) + 1)
+                token_ids += [self.bos_id] + self.bot_id + self.newline_id + encoded + [self.eos_id] + self.newline_id
+                loss_mask += [0] * 3   # <s> + <bot> + \n 不计算 loss
+                loss_mask += [1] * (1 + len(self.sp.encode(content, out_type=int)))   # type: ignore
+                loss_mask += [0]   # \n 不计算 loss
 
         if len(token_ids) < 2:   # 至少包含 <s> 和一个有效 token
             return None
@@ -491,7 +519,7 @@ class RLDataProcessor:
             yield from buffer
 
     def data_length(self):
-        """返回文件行数（用于进度条等）"""
+        """返回文件行数 (用于进度条等)"""
         with open(self.json_file, 'r', encoding='utf-8') as f:
             return sum(1 for line in f if line.strip())
 
