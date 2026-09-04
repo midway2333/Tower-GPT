@@ -172,7 +172,7 @@ class decoder(nn.Module):
 
         self.ffn = nn.Sequential(             # 前馈网络
             nn.Linear(d, dff, bias=False),    # 维度变换
-            nn.Dropout(self.dropout),                  # Dropout层
+            nn.Dropout(self.dropout),         # Dropout 层
             nn.GELU(),                        # 激活函数
             nn.Linear(dff, d, bias=False),    # 维度变换
         )
